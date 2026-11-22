@@ -23,7 +23,8 @@ groq
 openai
 anthropic
 google-genai
-gunicornflask
+flask
+gunicorn
 flask-cors
 python-dotenv
 groq
