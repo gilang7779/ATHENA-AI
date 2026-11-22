@@ -1,0 +1,33 @@
+groq==0.4.1          # ← Ditambahkan di line awal
+# Flask Web Framework
+Flask==3.0.0
+Flask-CORS==4.0.0
+
+# AI API Libraries (install yang dibutuhkan saja)
+openai==1.3.5
+anthropic==0.7.1
+google-generativeai==0.3.0
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Production Server
+gunicorn==21.2.0
+
+# Data Processing
+requests==2.31.0
+flask
+flask-cors
+python-dotenv
+groq
+openai
+anthropic
+google-genai
+gunicornflask
+flask-cors
+python-dotenv
+groq
+openai
+anthropic
+google-genai
+gunicorn

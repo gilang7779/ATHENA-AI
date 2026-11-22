@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Athena · AI Writing Platform</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="nebula"></div>
+
+<aside>
+  <button class="logo" data-tip="Beranda" title="Beranda" onclick="location.reload()">✦</button>
+  <button class="ico" data-tip="Riwayat chat" id="historyBtn" aria-label="Riwayat chat"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
+  <div class="spacer"></div>
+  <button class="ico" data-tip="Ganti tema" id="themeBtn" aria-label="Ganti tema"><svg class="theme-ico sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg><svg class="theme-ico moon" viewBox="0 0 24 24"><path d="M21 13a9 9 0 11-10-10 7 7 0 0010 10z"/></svg></button>
+  <div class="avatar" title="Jason">J</div>
+</aside>
+
+<main>
+  <header>
+    <div class="tokens" id="tokenMeter" title="Sisa token hari ini">
+      <span aria-hidden="true">⚡</span>
+      <span class="t-text"><b id="tokLeft">…</b> / <span id="tokMax">…</span> token</span>
+      <div class="t-bar"><i id="tokBar"></i></div>
+    </div>
+
+    <div class="menu" id="styleMenu" data-pick data-value="Casual">
+      <button class="btn" onclick="toggleMenu('styleMenu')">Gaya: <span class="pick-label">Casual</span> ⌄</button>
+      <ul><li>Formal</li><li>Casual</li><li>Persuasif</li><li>Ringkas</li></ul>
+    </div>
+
+    <button class="btn dark" id="newThread">+ New Thread</button>
+  </header>
+
+  <div class="center" id="center">
+    <div class="hero">
+      <div class="orb"></div>
+      <p class="welcome" id="welcome"></p>
+      <h1><span id="greet"></span><br><span class="accent" id="sub"></span></h1>
+    </div>
+
+    <div class="thread" id="thread" aria-live="polite"></div>
+
+    <div class="box">
+      <div class="row">
+        <svg viewBox="0 0 24 24"><path d="M12 2l2.2 6.3L21 10l-6.8 1.7L12 18l-2.2-6.3L3 10l6.8-1.7z"/></svg>
+        <textarea id="input" placeholder="Tanya Athena atau minta bantuan menulis…" rows="2"></textarea>
+      </div>
+      <div class="files" id="files"></div>
+      <div class="tools">
+        <div class="menu up" id="attachMenu">
+          <button class="btn" id="attachBtn" onclick="toggleMenu('attachMenu')" aria-label="Lampirkan file">📎</button>
+          <ul><li id="uploadItem">Upload or add files <span class="kbd">Ctrl+U</span></li></ul>
+        </div>
+        <input type="file" id="fileInput" multiple hidden accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,.csv,.json,.js,.py,.html,.css,.xml,.yml,.yaml,.log,.sql">
+        <button class="send" id="send" aria-label="Kirim"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+      </div>
+    </div>
+
+    <div class="start">
+      <h3>MULAI DARI CONTOH DI BAWAH</h3>
+      <p>Klik kartu untuk mengisi kotak input otomatis</p>
+      <div class="cards">
+        <button class="card" data-p="Buatkan to-do list untuk proyek pribadi saya, [nama proyek].">Buat to-do list untuk proyek pribadi</button>
+        <button class="card" data-p="Tulis email balasan untuk tawaran kerja sebagai [posisi] yang saya terima.">Tulis email balasan tawaran kerja</button>
+        <button class="card" data-p="Ringkas artikel ini dalam satu paragraf: [tempel teks artikel].">Ringkas artikel dalam satu paragraf</button>
+        <button class="card" data-p="Jelaskan cara kerja AI secara teknis, fokus pada machine learning.">Cara kerja AI secara teknis</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="drawer-backdrop" id="drawerBackdrop"></div>
+<div class="drawer" id="drawer" role="dialog" aria-label="Riwayat chat">
+  <div class="drawer-head">
+    <span>Riwayat chat</span>
+    <button class="drawer-x" id="drawerClose" aria-label="Tutup">×</button>
+  </div>
+  <div class="hist-list" id="historyList"></div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
