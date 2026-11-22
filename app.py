@@ -39,7 +39,20 @@ def serve_js():
 
 # ============ CONFIGURATION ============
 
-GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '') or os.getenv('GEMINI_API_KEY', '')
+def _clean_key(v):
+    """Buang spasi, baris baru, dan tanda kutip yang ikut tersalin."""
+    return (v or '').strip().strip('"\'').strip()
+
+def _pick_key():
+    """Pilih key yang berawalan 'AIza' (format Google AI Studio)."""
+    candidates = [_clean_key(os.getenv(n)) for n in ('GEMINI_API_KEY', 'GOOGLE_API_KEY')]
+    candidates = [c for c in candidates if c]
+    for c in candidates:
+        if c.startswith('AIza'):
+            return c
+    return candidates[0] if candidates else ''
+
+GOOGLE_API_KEY = _pick_key()
 
 # Jatah token per pengguna per hari. Ubah lewat .env: TOKEN_BUDGET=100000
 TOKEN_BUDGET = int(os.getenv('TOKEN_BUDGET', '50000'))
@@ -132,8 +145,11 @@ threads_meta: Dict[str, Dict] = {}   # {thread_id: {client_id, title, created, u
 usage_db: Dict[str, Dict] = {}
 
 # Riwayat chat disimpan ke file ini supaya tidak hilang saat server restart.
-# File ada di folder proyek (tidak ikut dilayani ke browser).
-DATA_FILE = os.path.join(BASE_DIR, 'threads_data.json')
+# Di Vercel filesystem read-only kecuali /tmp (dan tidak permanen).
+if os.environ.get('VERCEL'):
+    DATA_FILE = '/tmp/threads_data.json'
+else:
+    DATA_FILE = os.path.join(BASE_DIR, 'threads_data.json')
 
 def save_threads():
     try:
@@ -253,7 +269,10 @@ def read_uploads(uploads) -> Tuple[str, List[Tuple[bytes, str]], List[str]]:
 def call_google_gemini(messages: List[Dict], style: str = 'Formal',
                        media: Optional[List[Tuple[bytes, str]]] = None) -> Tuple[str, int, bool]:
     if not GOOGLE_API_KEY:
-        return "GOOGLE_API_KEY belum diisi di file .env", 0, False
+        return "GEMINI_API_KEY belum diisi (cek Environment Variables di Vercel)", 0, False
+    if not GOOGLE_API_KEY.startswith('AIza'):
+        return ("Key yang terbaca tidak berawalan 'AIza'. Itu bukan API key Gemini dari "
+                "AI Studio. Cek GEMINI_API_KEY dan GOOGLE_API_KEY di Vercel."), 0, False
 
     try:
         from google import genai
@@ -309,6 +328,8 @@ def health_check():
         'status': 'healthy',
         'version': '2.0.0',
         'gemini_configured': bool(GOOGLE_API_KEY),
+        'key_prefix': GOOGLE_API_KEY[:4],
+        'key_len': len(GOOGLE_API_KEY),
     }))
 
 @app.route('/api/usage', methods=['GET'])
@@ -487,7 +508,7 @@ def server_error(error):
 
 if __name__ == '__main__':
     if not GOOGLE_API_KEY:
-        print("⚠️  WARNING: GOOGLE_API_KEY belum diisi di file .env!")
+        print("⚠️  WARNING: GEMINI_API_KEY belum diisi di file .env!")
     # 127.0.0.1 = hanya bisa diakses dari komputer ini (aman untuk debug=True).
     # Untuk Render/hosting, jalankan lewat gunicorn: gunicorn app:app
     app.run(debug=True, host='127.0.0.1', port=5000)
