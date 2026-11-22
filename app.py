@@ -44,13 +44,12 @@ def _clean_key(v):
     return (v or '').strip().strip('"\'').strip()
 
 def _pick_key():
-    """Pilih key yang berawalan 'AIza' (format Google AI Studio)."""
-    candidates = [_clean_key(os.getenv(n)) for n in ('GEMINI_API_KEY', 'GOOGLE_API_KEY')]
-    candidates = [c for c in candidates if c]
-    for c in candidates:
-        if c.startswith('AIza'):
-            return c
-    return candidates[0] if candidates else ''
+    """Ambil key pertama yang terisi (mendukung format AIza maupun AQ.)."""
+    for n in ('GEMINI_API_KEY', 'GOOGLE_API_KEY'):
+        k = _clean_key(os.getenv(n))
+        if k:
+            return k
+    return ''
 
 GOOGLE_API_KEY = _pick_key()
 
@@ -270,9 +269,6 @@ def call_google_gemini(messages: List[Dict], style: str = 'Formal',
                        media: Optional[List[Tuple[bytes, str]]] = None) -> Tuple[str, int, bool]:
     if not GOOGLE_API_KEY:
         return "GEMINI_API_KEY belum diisi (cek Environment Variables di Vercel)", 0, False
-    if not GOOGLE_API_KEY.startswith('AIza'):
-        return ("Key yang terbaca tidak berawalan 'AIza'. Itu bukan API key Gemini dari "
-                "AI Studio. Cek GEMINI_API_KEY dan GOOGLE_API_KEY di Vercel."), 0, False
 
     try:
         from google import genai
