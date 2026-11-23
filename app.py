@@ -260,52 +260,31 @@ def call_google_gemini(messages: List[Dict], style: str = 'Formal',
         return "GEMINI_API_KEY belum diisi (cek Environment Variables di Vercel)", 0, False
 
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODELS['Gemini']['model_id']}:generateContent"
-        headers = {
-            "x-goog-api-key": GOOGLE_API_KEY,
-            "Content-Type": "application/json",
-        }
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=GOOGLE_API_KEY)
 
         contents = []
         for i, m in enumerate(messages):
             role = 'model' if m['role'] == 'assistant' else 'user'
             parts = []
             if i == len(messages) - 1 and media:
-                for d, mt in media:
-                    parts.append({
-                        "inline_data": {
-                            "mime_type": mt,
-                            "data": base64.b64encode(d).decode('utf-8'),
-                        }
-                    })
-            parts.append({"text": m['content']})
-            contents.append({"role": role, "parts": parts})
+                parts.extend(types.Part.from_bytes(data=d, mime_type=mt) for d, mt in media)
+            parts.append(types.Part.from_text(text=m['content']))
+            contents.append(types.Content(role=role, parts=parts))
 
-        payload = {
-            "system_instruction": {
-                "parts": [{"text": build_system_prompt(style)}]
-            },
-            "contents": contents,
-        }
-
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
-        data = resp.json()
-
-        if not resp.ok:
-            err_msg = data.get('error', {}).get('message', resp.text)
-            return f"Gagal memanggil Gemini: {resp.status_code} {err_msg}", 0, False
-
-        candidates = data.get('candidates', [])
-        if not candidates:
-            return "Model tidak memberikan jawaban. Coba ulangi pertanyaannya.", 0, False
-
-        parts_out = candidates[0].get('content', {}).get('parts', [])
-        text = "".join(p.get('text', '') for p in parts_out)
+        response = client.models.generate_content(
+            model=MODELS['Gemini']['model_id'],
+            contents=contents,
+            config=types.GenerateContentConfig(system_instruction=build_system_prompt(style)),
+        )
+        text = response.text or ''
         if not text:
             return "Model tidak memberikan jawaban. Coba ulangi pertanyaannya.", 0, False
 
-        meta = data.get('usageMetadata', {})
-        tokens = meta.get('totalTokenCount', 0) or estimate_tokens(messages, text)
+        meta = getattr(response, 'usage_metadata', None)
+        tokens = getattr(meta, 'total_token_count', 0) or estimate_tokens(messages, text)
         return text, tokens, True
 
     except Exception as e:
