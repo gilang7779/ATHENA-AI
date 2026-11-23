@@ -300,12 +300,21 @@ def call_google_gemini(messages: List[Dict], style: str = 'Formal',
                 err_msg = data.get('error', {}).get('message', resp.text)
                 return f"Gagal memanggil Gemini: {resp.status_code} {err_msg}", 0, False
 
-            outputs = data.get('outputs', [])
-            text = "".join(out.get('text', '') for out in outputs if out.get('type') == 'text')
-            if not text:
-                text = data.get('output', {}).get('text', '') or str(data)
+            text = ""
+            for step in data.get('steps', []):
+                if step.get('type') == 'model_output':
+                    for item in step.get('content', []):
+                        if item.get('type') == 'text':
+                            text += item.get('text', '')
 
-            tokens = estimate_tokens(messages, text)
+            if not text:
+                outputs = data.get('outputs', [])
+                text = "".join(out.get('text', '') for out in outputs if out.get('type') == 'text')
+
+            if not text:
+                return "Model tidak memberikan jawaban teks. Coba ulangi.", 0, False
+
+            tokens = data.get('usage', {}).get('total_tokens') or estimate_tokens(messages, text)
             return text, tokens, True
 
         # Format AIza menggunakan SDK google-genai standar
@@ -361,7 +370,7 @@ def health_check():
     current_key = _pick_key()
     return jsonify(format_response({
         'status': 'healthy',
-        'version': '2.1.1',
+        'version': '2.1.2',
         'gemini_configured': bool(current_key),
         'key_prefix': current_key[:4],
         'key_len': len(current_key),
