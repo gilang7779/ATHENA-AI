@@ -274,7 +274,7 @@ def call_google_gemini(messages: List[Dict], style: str = 'Formal',
         return "GEMINI_API_KEY belum diisi (cek Environment Variables di Vercel)", 0, False
 
     try:
-        # Format AQ. menggunakan Interactions API (v1alpha/interactions)
+        # Format AQ. menggunakan Interactions API (v1beta/interactions)
         if api_key.startswith('AQ.'):
             convo = []
             for m in messages:
@@ -282,7 +282,7 @@ def call_google_gemini(messages: List[Dict], style: str = 'Formal',
                 convo.append(f"{who}: {m['content']}")
             prompt_text = "\n\n".join(convo)
 
-            url = "https://generativelanguage.googleapis.com/v1alpha/interactions"
+            url = "https://generativelanguage.googleapis.com/v1beta/interactions"
             headers = {
                 "x-goog-api-key": api_key,
                 "Content-Type": "application/json",
@@ -361,7 +361,7 @@ def health_check():
     current_key = _pick_key()
     return jsonify(format_response({
         'status': 'healthy',
-        'version': '2.1.0',
+        'version': '2.1.1',
         'gemini_configured': bool(current_key),
         'key_prefix': current_key[:4],
         'key_len': len(current_key),
