@@ -64,7 +64,7 @@ HISTORY_LIMIT = 20
 MODELS = {
     'Gemini': {
         'provider': 'google',
-        'model_id': 'gemini-3.8-flash',
+        'model_id': 'gemini-3.8-flash-lite',
     },
 }
 DEFAULT_MODEL = 'Gemini'
