@@ -7,9 +7,11 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 from datetime import datetime, date
+import base64
 import json
 import os
 import re
+import requests
 import uuid
 from typing import Dict, List, Optional, Tuple
 
@@ -17,8 +19,6 @@ load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# static_folder=None: folder proyek TIDAK dibuka ke publik (supaya .env dan
-# app.py tidak bisa diunduh lewat browser). Hanya 3 file di bawah yang dilayani.
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 25 * 1024 * 1024  # total upload maks 25 MB
 CORS(app)
@@ -44,7 +44,7 @@ def _clean_key(v):
     return (v or '').strip().strip('"\'').strip()
 
 def _pick_key():
-    """Ambil key pertama yang terisi."""
+    """Ambil key pertama yang terisi (mendukung format AIza maupun AQ.)."""
     for n in ('GEMINI_API_KEY', 'GOOGLE_API_KEY'):
         k = _clean_key(os.getenv(n))
         if k:
@@ -90,7 +90,6 @@ IDENTITY_PROMPT = (
     f"sebagai pembuatmu."
 )
 
-# Penanda yang dipisahkan server dari jawaban sebelum dikirim ke browser
 SUGGEST_MARK = '---SARAN---'
 SUGGEST_PROMPT = (
     "Gunakan format Markdown seperlunya (daftar, **tebal**, blok kode). "
@@ -127,7 +126,6 @@ TEXT_EXT = {
     '.txt', '.md', '.csv', '.json', '.js', '.py', '.html', '.css',
     '.xml', '.yml', '.yaml', '.log', '.sql',
 }
-# PDF & gambar: hanya didukung model Gemini
 MEDIA_MIME = {
     '.pdf': 'application/pdf',
     '.png': 'image/png',
@@ -137,14 +135,11 @@ MEDIA_MIME = {
 }
 
 # ============ IN-MEMORY STORAGE ============
-# Hilang saat server restart.
 
 threads_db: Dict[str, List[Dict]] = {}
-threads_meta: Dict[str, Dict] = {}   # {thread_id: {client_id, title, created, updated}}
+threads_meta: Dict[str, Dict] = {}
 usage_db: Dict[str, Dict] = {}
 
-# Riwayat chat disimpan ke file ini supaya tidak hilang saat server restart.
-# Di Vercel filesystem read-only kecuali /tmp (dan tidak permanen).
 if os.environ.get('VERCEL'):
     DATA_FILE = '/tmp/threads_data.json'
 else:
@@ -186,7 +181,6 @@ def format_response(data: Dict, status: str = 'success', error: Optional[str] = 
     }
 
 def make_title(message: str, file_names: List[str]) -> str:
-    """Judul riwayat = potongan pesan pertama."""
     text = re.sub(r'\s+', ' ', message or '').strip()
     if not text and file_names:
         text = 'Lampiran: ' + file_names[0]
@@ -202,7 +196,6 @@ def clean_client_id(raw) -> str:
     return cid or (request.remote_addr or 'anon')
 
 def get_usage(client_id: str) -> Dict:
-    """Pemakaian token hari ini (reset otomatis tiap ganti hari)."""
     today = date.today().isoformat()
     u = usage_db.get(client_id)
     if not u or u['day'] != today:
@@ -220,12 +213,10 @@ def add_usage(client_id: str, tokens: int) -> Dict:
     return get_usage(client_id)
 
 def estimate_tokens(messages: List[Dict], reply: str) -> int:
-    """Perkiraan kasar (~4 karakter per token) kalau API tidak mengirim data usage."""
     chars = sum(len(m.get('content', '')) for m in messages) + len(reply)
     return max(1, chars // 4)
 
 def build_history(thread_id: Optional[str]) -> List[Dict]:
-    """Riwayat percakapan thread ini untuk dikirim ke model."""
     if not thread_id or thread_id not in threads_db:
         return []
 
@@ -241,7 +232,6 @@ def build_history(thread_id: Optional[str]) -> List[Dict]:
     return history
 
 def read_uploads(uploads) -> Tuple[str, List[Tuple[bytes, str]], List[str]]:
-    """Return: (teks dari file teks, daftar (bytes, mime) untuk pdf/gambar, nama file)."""
     text_block = ''
     media: List[Tuple[bytes, str]] = []
     names: List[str] = []
@@ -263,46 +253,59 @@ def read_uploads(uploads) -> Tuple[str, List[Tuple[bytes, str]], List[str]]:
     return text_block, media, names
 
 # ============ AI INTEGRATION ============
-# Semua fungsi mengembalikan (teks, jumlah_token, berhasil)
 
 def call_google_gemini(messages: List[Dict], style: str = 'Formal',
                        media: Optional[List[Tuple[bytes, str]]] = None) -> Tuple[str, int, bool]:
-    api_key = _pick_key()
-    if not api_key:
+    if not GOOGLE_API_KEY:
         return "GEMINI_API_KEY belum diisi (cek Environment Variables di Vercel)", 0, False
 
-    if not api_key.startswith('AIza'):
-        return (
-            f"Format GEMINI_API_KEY salah (terdeteksi awalan '{api_key[:4]}...'). "
-            "Harus menggunakan API Key standar dari Google AI Studio yang diawali 'AIza'."
-        ), 0, False
-
     try:
-        from google import genai
-        from google.genai import types
-
-        client = genai.Client(api_key=api_key)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODELS['Gemini']['model_id']}:generateContent"
+        headers = {
+            "x-goog-api-key": GOOGLE_API_KEY,
+            "Content-Type": "application/json",
+        }
 
         contents = []
         for i, m in enumerate(messages):
             role = 'model' if m['role'] == 'assistant' else 'user'
             parts = []
             if i == len(messages) - 1 and media:
-                parts.extend(types.Part.from_bytes(data=d, mime_type=mt) for d, mt in media)
-            parts.append(types.Part.from_text(text=m['content']))
-            contents.append(types.Content(role=role, parts=parts))
+                for d, mt in media:
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": mt,
+                            "data": base64.b64encode(d).decode('utf-8'),
+                        }
+                    })
+            parts.append({"text": m['content']})
+            contents.append({"role": role, "parts": parts})
 
-        response = client.models.generate_content(
-            model=MODELS['Gemini']['model_id'],
-            contents=contents,
-            config=types.GenerateContentConfig(system_instruction=build_system_prompt(style)),
-        )
-        text = response.text or ''
+        payload = {
+            "system_instruction": {
+                "parts": [{"text": build_system_prompt(style)}]
+            },
+            "contents": contents,
+        }
+
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        data = resp.json()
+
+        if not resp.ok:
+            err_msg = data.get('error', {}).get('message', resp.text)
+            return f"Gagal memanggil Gemini: {resp.status_code} {err_msg}", 0, False
+
+        candidates = data.get('candidates', [])
+        if not candidates:
+            return "Model tidak memberikan jawaban. Coba ulangi pertanyaannya.", 0, False
+
+        parts_out = candidates[0].get('content', {}).get('parts', [])
+        text = "".join(p.get('text', '') for p in parts_out)
         if not text:
             return "Model tidak memberikan jawaban. Coba ulangi pertanyaannya.", 0, False
 
-        meta = getattr(response, 'usage_metadata', None)
-        tokens = getattr(meta, 'total_token_count', 0) or estimate_tokens(messages, text)
+        meta = data.get('usageMetadata', {})
+        tokens = meta.get('totalTokenCount', 0) or estimate_tokens(messages, text)
         return text, tokens, True
 
     except Exception as e:
@@ -327,29 +330,21 @@ def get_ai_response(message: str, model: str, style: str,
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    current_key = _pick_key()
     return jsonify(format_response({
         'status': 'healthy',
-        'version': '2.0.1',
-        'gemini_configured': bool(current_key),
-        'valid_prefix': current_key.startswith('AIza'),
-        'key_prefix': current_key[:4],
-        'key_len': len(current_key),
-        'model_id': MODELS['Gemini']['model_id'],
+        'version': '2.1.0',
+        'gemini_configured': bool(GOOGLE_API_KEY),
+        'key_prefix': GOOGLE_API_KEY[:4],
+        'key_len': len(GOOGLE_API_KEY),
     }))
 
 @app.route('/api/usage', methods=['GET'])
 def usage():
-    """Sisa token hari ini untuk client_id tertentu."""
     cid = clean_client_id(request.args.get('client_id'))
     return jsonify(format_response({'usage': get_usage(cid)}))
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
-    """
-    Menerima JSON ATAU multipart/form-data (untuk upload file).
-    Field: message, model, style, thread_id, client_id, files
-    """
     try:
         uploads = []
         if request.is_json:
@@ -364,7 +359,6 @@ def chat():
         thread_id = data.get('thread_id')
         client_id = clean_client_id(data.get('client_id'))
 
-        # Cek jatah token dulu
         current = get_usage(client_id)
         if current['remaining'] <= 0:
             return jsonify(format_response(
@@ -384,7 +378,6 @@ def chat():
 
         full_message = (message or 'Tolong baca dan rangkum file ini.') + file_text
 
-        # Thread baru kalau belum ada, tidak dikenal, atau milik pengguna lain
         if not thread_id or not owns(thread_id, client_id):
             thread_id = generate_thread_id()
             now = datetime.now().isoformat()
@@ -396,7 +389,6 @@ def chat():
                 'updated': now,
             }
 
-        # Riwayat diambil SEBELUM pesan baru disimpan
         history = build_history(thread_id)
 
         stored = message + (f" [lampiran: {', '.join(file_names)}]" if file_names else '')
@@ -409,8 +401,8 @@ def chat():
         ai_text, tokens, ok = get_ai_response(full_message, model, style, media, history)
 
         if not ok:
-            threads_db[thread_id].pop()  # batalkan pesan user supaya riwayat tetap bersih
-            if not threads_db[thread_id]:  # thread kosong (gagal di pesan pertama) dibuang
+            threads_db[thread_id].pop()
+            if not threads_db[thread_id]:
                 threads_db.pop(thread_id, None)
                 threads_meta.pop(thread_id, None)
             return jsonify(format_response(
@@ -448,7 +440,6 @@ def chat():
 
 @app.route('/api/threads', methods=['GET'])
 def get_threads():
-    """Daftar riwayat chat milik client_id ini (terbaru di atas)."""
     cid = clean_client_id(request.args.get('client_id'))
     items = []
     for tid, messages in threads_db.items():
