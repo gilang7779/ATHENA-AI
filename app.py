@@ -44,7 +44,7 @@ def _clean_key(v):
     return (v or '').strip().strip('"\'').strip()
 
 def _pick_key():
-    """Ambil key pertama yang terisi (mendukung format AIza maupun AQ.)."""
+    """Ambil key pertama yang terisi."""
     for n in ('GEMINI_API_KEY', 'GOOGLE_API_KEY'):
         k = _clean_key(os.getenv(n))
         if k:
@@ -62,7 +62,7 @@ HISTORY_LIMIT = 20
 MODELS = {
     'Gemini': {
         'provider': 'google',
-        'model_id': 'gemini-3.5-flash-lite',
+        'model_id': 'gemini-2.5-flash',
     },
 }
 DEFAULT_MODEL = 'Gemini'
@@ -267,14 +267,21 @@ def read_uploads(uploads) -> Tuple[str, List[Tuple[bytes, str]], List[str]]:
 
 def call_google_gemini(messages: List[Dict], style: str = 'Formal',
                        media: Optional[List[Tuple[bytes, str]]] = None) -> Tuple[str, int, bool]:
-    if not GOOGLE_API_KEY:
+    api_key = _pick_key()
+    if not api_key:
         return "GEMINI_API_KEY belum diisi (cek Environment Variables di Vercel)", 0, False
+
+    if not api_key.startswith('AIza'):
+        return (
+            f"Format GEMINI_API_KEY salah (terdeteksi awalan '{api_key[:4]}...'). "
+            "Harus menggunakan API Key standar dari Google AI Studio yang diawali 'AIza'."
+        ), 0, False
 
     try:
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=GOOGLE_API_KEY)
+        client = genai.Client(api_key=api_key)
 
         contents = []
         for i, m in enumerate(messages):
@@ -320,12 +327,15 @@ def get_ai_response(message: str, model: str, style: str,
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
+    current_key = _pick_key()
     return jsonify(format_response({
         'status': 'healthy',
-        'version': '2.0.0',
-        'gemini_configured': bool(GOOGLE_API_KEY),
-        'key_prefix': GOOGLE_API_KEY[:4],
-        'key_len': len(GOOGLE_API_KEY),
+        'version': '2.0.1',
+        'gemini_configured': bool(current_key),
+        'valid_prefix': current_key.startswith('AIza'),
+        'key_prefix': current_key[:4],
+        'key_len': len(current_key),
+        'model_id': MODELS['Gemini']['model_id'],
     }))
 
 @app.route('/api/usage', methods=['GET'])
@@ -505,6 +515,4 @@ def server_error(error):
 if __name__ == '__main__':
     if not GOOGLE_API_KEY:
         print("⚠️  WARNING: GEMINI_API_KEY belum diisi di file .env!")
-    # 127.0.0.1 = hanya bisa diakses dari komputer ini (aman untuk debug=True).
-    # Untuk Render/hosting, jalankan lewat gunicorn: gunicorn app:app
     app.run(debug=True, host='127.0.0.1', port=5000)
