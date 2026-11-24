@@ -10,7 +10,57 @@
 <div id="nebula"></div>
 
 <aside>
-  <button class="logo" data-tip="Beranda" title="Beranda" onclick="location.reload()">✦</button>
+  <div class="logo-menu-wrapper">
+    <button class="logo" id="athenaLogoBtn" data-tip="Menu Fitur" title="Menu Fitur" aria-label="Menu Fitur">✦</button>
+    
+    <div id="athenaFeatureMenu" class="feature-dropdown">
+      <div class="menu-header">Fitur Utama</div>
+      
+      <button type="button" class="menu-item" onclick="selectAthenaFeature('chat')">
+        <span>💬</span>
+        <div>
+          <strong>AI Chat & Reasoning</strong>
+          <small>Diskusi & pemecahan masalah</small>
+        </div>
+      </button>
+
+      <button type="button" class="menu-item" onclick="selectAthenaFeature('writing')">
+        <span>✍️</span>
+        <div>
+          <strong>Writing Assistant</strong>
+          <small>Buat & perbaiki tulisan dengan gaya khusus</small>
+        </div>
+      </button>
+
+      <button type="button" class="menu-item" onclick="selectAthenaFeature('image')">
+        <span>🎨</span>
+        <div>
+          <strong>Image Generation</strong>
+          <small>Buat gambar dari deskripsi teks</small>
+        </div>
+      </button>
+
+      <div class="menu-divider"></div>
+      <div class="menu-header">Navigasi & Dukungan</div>
+
+      <button type="button" class="menu-item" onclick="openAthenaHistory()">
+        <span>🕒</span>
+        <div>
+          <strong>Riwayat Chat</strong>
+          <small>Buka sesi percakapan sebelumnya</small>
+        </div>
+      </button>
+
+      <button type="button" class="menu-item" onclick="openAthenaHelp()">
+        <span>❓</span>
+        <div>
+          <strong>Bantuan & Panduan</strong>
+          <small>Cara pakai & daftar perintah cepat</small>
+        </div>
+      </button>
+    </div>
+  </div>
+
   <button class="ico" data-tip="Riwayat chat" id="historyBtn" aria-label="Riwayat chat"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
   <div class="spacer"></div>
   <button class="ico" data-tip="Ganti tema" id="themeBtn" aria-label="Ganti tema"><svg class="theme-ico sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg><svg class="theme-ico moon" viewBox="0 0 24 24"><path d="M21 13a9 9 0 11-10-10 7 7 0 0010 10z"/></svg></button>
@@ -80,6 +130,110 @@
   <div class="hist-list" id="historyList"></div>
 </div>
 
+<!-- Modal Bantuan -->
+<div id="athenaHelpModal" class="athena-modal-overlay" role="dialog" aria-modal="true" aria-label="Bantuan Athena AI">
+  <div class="athena-modal-box">
+    <div class="modal-header">
+      <h3>Pusat Bantuan Athena AI</h3>
+      <button type="button" onclick="closeAthenaHelp()" class="close-modal-btn" aria-label="Tutup">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p><strong>💡 Panduan Fitur:</strong></p>
+      <ul>
+        <li><strong>AI Chat & Reasoning:</strong> Diskusi bebas, analisis kode, atau tanya jawab umum.</li>
+        <li><strong>Writing Assistant:</strong> Gunakan menu <em>Gaya</em> di kanan atas (Formal, Casual, Persuasif, Ringkas) untuk menyesuaikan nada tulisan.</li>
+        <li><strong>Image Generation:</strong> Deskripsikan gambar yang ingin dibuat sedetail mungkin.</li>
+        <li><strong>Riwayat Chat:</strong> Klik ikon jam atau menu Riwayat Chat untuk membuka kembali percakapan lama.</li>
+      </ul>
+      <div class="shortcut-box">
+        <span><code>Enter</code> : Kirim</span>
+        <span><code>Shift + Enter</code> : Baris baru</span>
+        <span><code>Ctrl + U</code> : Lampirkan file</span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="script.js"></script>
+<script>
+  (function() {
+    const logoBtn = document.getElementById('athenaLogoBtn');
+    const featureMenu = document.getElementById('athenaFeatureMenu');
+    const helpModal = document.getElementById('athenaHelpModal');
+    const inputEl = document.getElementById('input');
+
+    // Toggle menu saat logo diklik
+    logoBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      featureMenu.classList.toggle('active');
+    });
+
+    // Tutup menu jika klik di luar
+    document.addEventListener('click', (e) => {
+      if (!featureMenu.contains(e.target) && !logoBtn.contains(e.target)) {
+        featureMenu.classList.remove('active');
+      }
+    });
+
+    // Pilih fitur dari dropdown logo
+    window.selectAthenaFeature = function(mode) {
+      featureMenu.classList.remove('active');
+      if (!inputEl) return;
+
+      if (mode === 'chat') {
+        inputEl.placeholder = 'Tanya Athena atau diskusikan masalah…';
+      } else if (mode === 'writing') {
+        inputEl.placeholder = 'Masukkan topik atau draf teks yang ingin ditulis/diperbaiki…';
+        // Otomatis buka pilihan Gaya tulisan jika belum terbuka
+        const styleMenu = document.getElementById('styleMenu');
+        if (styleMenu && !styleMenu.classList.contains('open')) {
+          styleMenu.classList.add('open');
+        }
+      } else if (mode === 'image') {
+        inputEl.placeholder = 'Deskripsikan gambar yang ingin dibuat (contoh: Pemandangan kota futuristik malam hari)…';
+        if (!inputEl.value.trim()) {
+          inputEl.value = '/imagine ';
+        }
+      }
+      inputEl.focus();
+    };
+
+    // Buka drawer riwayat chat bawaan (memicu klik tombol #historyBtn Anda)
+    window.openAthenaHistory = function() {
+      featureMenu.classList.remove('active');
+      const historyBtn = document.getElementById('historyBtn');
+      if (historyBtn) {
+        historyBtn.click();
+      } else {
+        document.getElementById('drawer')?.classList.add('open');
+        document.getElementById('drawerBackdrop')?.classList.add('open');
+      }
+    };
+
+    // Buka & tutup modal bantuan
+    window.openAthenaHelp = function() {
+      featureMenu.classList.remove('active');
+      helpModal.classList.add('show');
+    };
+
+    window.closeAthenaHelp = function() {
+      helpModal.classList.remove('show');
+    };
+
+    helpModal.addEventListener('click', (e) => {
+      if (e.target === helpModal) {
+        closeAthenaHelp();
+      }
+    });
+
+    // Tutup menu/modal dengan tombol Escape
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        featureMenu.classList.remove('active');
+        closeAthenaHelp();
+      }
+    });
+  })();
+</script>
 </body>
 </html>
