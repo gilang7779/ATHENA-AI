@@ -44,134 +44,6 @@ const CLIENT_ID = getClientId();
 
 const fmt = (n) => new Intl.NumberFormat('id-ID').format(n);
 
-// ============ VOICE (TTS & STT) ============
-
-let activeSpeakBtn = null;
-
-function stopSpeech() {
-  if ('speechSynthesis' in window) {
-    window.speechSynthesis.cancel();
-  }
-  if (activeSpeakBtn) {
-    activeSpeakBtn.textContent = '🔊 Dengar';
-    activeSpeakBtn.classList.remove('speaking');
-    activeSpeakBtn = null;
-  }
-}
-
-function toggleSpeak(text, btn) {
-  if (!('speechSynthesis' in window)) {
-    alert('Browser kamu belum mendukung fitur Text-to-Speech.');
-    return;
-  }
-
-  // Jika tombol yang sama diklik saat sedang berbicara, hentikan
-  if (activeSpeakBtn === btn) {
-    stopSpeech();
-    return;
-  }
-
-  stopSpeech();
-
-  // Bersihkan simbol markdown agar tidak dibaca aneh oleh mesin suara
-  const cleanText = text
-    .replace(/```[\s\S]*?```/g, ' [blok kode] ')
-    .replace(/[*#_`~>-]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (!cleanText) return;
-
-  const utterance = new SpeechSynthesisUtterance(cleanText);
-  utterance.lang = 'id-ID';
-  utterance.rate = 1.02;
-
-  // Pilih suara bahasa Indonesia jika tersedia di OS/Browser
-  const voices = window.speechSynthesis.getVoices();
-  const idVoice = voices.find((v) => v.lang.includes('id'));
-  if (idVoice) utterance.voice = idVoice;
-
-  activeSpeakBtn = btn;
-  btn.textContent = '⏹ Berhenti';
-  btn.classList.add('speaking');
-
-  utterance.onend = () => stopSpeech();
-  utterance.onerror = () => stopSpeech();
-
-  window.speechSynthesis.speak(utterance);
-}
-
-// Inisialisasi Speech-to-Text (Mic)
-(function initVoiceInput() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition || !sendBtn || !sendBtn.parentElement) return;
-
-  // Gunakan tombol #micBtn jika sudah ada di HTML, atau buat otomatis di sebelah tombol Send
-  let micBtn = $('micBtn');
-  if (!micBtn) {
-    micBtn = document.createElement('button');
-    micBtn.id = 'micBtn';
-    micBtn.type = 'button';
-    micBtn.className = 'mic-btn';
-    micBtn.title = 'Dikte suara (Bahasa Indonesia)';
-    micBtn.setAttribute('aria-label', 'Dikte suara');
-    micBtn.textContent = '🎙️';
-    micBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:1.1rem;padding:6px 8px;border-radius:8px;opacity:0.85;transition:all 0.2s;';
-    sendBtn.parentElement.insertBefore(micBtn, sendBtn);
-  }
-
-  const recognition = new SpeechRecognition();
-  recognition.lang = 'id-ID';
-  recognition.continuous = false;
-  recognition.interimResults = true;
-
-  let listening = false;
-  let baseText = '';
-
-  recognition.onstart = () => {
-    listening = true;
-    baseText = input.value ? input.value.trim() + ' ' : '';
-    micBtn.textContent = '🔴';
-    micBtn.title = 'Sedang mendengarkan... Klik untuk berhenti';
-    micBtn.style.opacity = '1';
-  };
-
-  recognition.onresult = (event) => {
-    let transcript = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      transcript += event.results[i][0].transcript;
-    }
-    input.value = baseText + transcript;
-    autosize();
-  };
-
-  recognition.onerror = (event) => {
-    if (event.error === 'not-allowed') {
-      alert('Izin mikrofon ditolak. Aktifkan izin mikrofon di pengaturan browser.');
-    }
-  };
-
-  recognition.onend = () => {
-    listening = false;
-    micBtn.textContent = '🎙️';
-    micBtn.title = 'Dikte suara (Bahasa Indonesia)';
-    micBtn.style.opacity = '0.85';
-    input.focus();
-  };
-
-  micBtn.onclick = () => {
-    if (busy) return;
-    stopSpeech(); // Hentikan suara AI jika sedang membaca
-    if (listening) {
-      recognition.stop();
-    } else {
-      try {
-        recognition.start();
-      } catch (e) {}
-    }
-  };
-})();
-
 // ============ THEME ============
 
 function setTheme(theme) {
@@ -237,7 +109,7 @@ async function playHero() {
   welcomeEl.classList.add('show');
   greetEl.textContent = '';
   subEl.textContent = '';
-  await typeInto(greetEl, `${greetingWord()},${USER_NAME}`, run);
+  await typeInto(greetEl, `${greetingWord()}, ${USER_NAME}`, run);
   if (run !== heroRun) return;
   await typeInto(subEl, 'Apa yang sedang kamu pikirkan?', run);
 }
@@ -491,18 +363,8 @@ function typewriter(bubble, body, text) {
 function addFooter(bubble, text, metaText) {
   const foot = document.createElement('div');
   foot.className = 'msg-foot';
-
   const small = document.createElement('small');
   small.textContent = metaText;
-
-  const actions = document.createElement('div');
-  actions.style.cssText = 'display:flex;gap:8px;align-items:center;';
-
-  const speak = document.createElement('button');
-  speak.className = 'copy'; // memakai style tombol yang sama dengan Salin
-  speak.textContent = '🔊 Dengar';
-  speak.onclick = () => toggleSpeak(text, speak);
-
   const copy = document.createElement('button');
   copy.className = 'copy';
   copy.textContent = 'Salin';
@@ -513,9 +375,7 @@ function addFooter(bubble, text, metaText) {
       setTimeout(() => (copy.textContent = 'Salin'), 1500);
     } catch (e) {}
   };
-
-  actions.append(speak, copy);
-  foot.append(small, actions);
+  foot.append(small, copy);
   bubble.appendChild(foot);
 }
 
@@ -574,7 +434,6 @@ async function submitMessage(textOverride) {
   const value = (typeof textOverride === 'string' ? textOverride : input.value).trim();
   if (!value && !attached.length) return;
 
-  stopSpeech();
   busy = true;
   sendBtn.disabled = true;
 
@@ -621,7 +480,6 @@ input.addEventListener('keydown', (e) => {
 // ============ NEW THREAD ============
 
 function startNewThread() {
-  stopSpeech();
   thread.innerHTML = '';
   threadId = null;
   setChatting(false);
@@ -768,7 +626,6 @@ async function openThread(id) {
       return;
     }
 
-    stopSpeech();
     heroRun++; // hentikan animasi salam kalau masih berjalan
     thread.innerHTML = '';
     threadId = id;
