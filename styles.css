@@ -89,6 +89,7 @@ aside {
   align-items: flex-start;
   gap: 6px;
   min-height: 0;
+  z-index: 10; /* Memastikan dropdown logo berada di atas main */
 }
 
 .logo {
@@ -103,6 +104,205 @@ aside {
   border: 0;
   cursor: pointer;
   margin-bottom: 14px;
+  transition: transform 0.2s ease, box-shadow 0.25s ease;
+}
+
+.logo:hover {
+  transform: scale(1.05);
+  box-shadow: var(--glow);
+}
+
+/* ============ LOGO DROPDOWN MENU ============ */
+.logo-menu-wrapper {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 14px;
+}
+
+.logo-menu-wrapper .logo {
+  margin-bottom: 0;
+}
+
+.feature-dropdown {
+  position: absolute;
+  top: 0;
+  left: 52px;
+  width: 265px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 8px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+  z-index: 1000;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-8px);
+  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease, background-color 1s ease, border-color 1s ease;
+}
+
+.feature-dropdown.active {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.menu-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 6px 10px;
+  font-weight: 600;
+}
+
+.menu-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 6px 8px;
+}
+
+.menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.menu-item span {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.menu-item strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.menu-item small {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.menu-item:hover small {
+  color: var(--text);
+}
+
+/* ============ MODAL BANTUAN ============ */
+.athena-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 2000;
+}
+
+.athena-modal-overlay.show {
+  display: flex;
+  animation: fadeIn 0.2s ease both;
+}
+
+.athena-modal-box {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 440px;
+  padding: 20px;
+  color: var(--text);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  animation: rise 0.25s ease both;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+}
+
+.modal-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.close-modal-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.close-modal-btn:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.modal-body p {
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.modal-body ul {
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.modal-body li {
+  margin-bottom: 8px;
+}
+
+.modal-body li strong {
+  color: var(--text);
+}
+
+.shortcut-box {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  justify-content: space-around;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.shortcut-box code {
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
 }
 
 .ico {
@@ -967,6 +1167,11 @@ textarea::placeholder {
   .logo {
     width: 38px;
     height: 38px;
+  }
+
+  .feature-dropdown {
+    left: 48px;
+    width: min(250px, calc(100vw - 72px));
   }
 
   main {
