@@ -104,6 +104,16 @@
           <ul><li id="uploadItem">Upload or add files <span class="kbd">Ctrl+U</span></li></ul>
         </div>
         <input type="file" id="fileInput" multiple hidden accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,.csv,.json,.js,.py,.html,.css,.xml,.yml,.yaml,.log,.sql">
+
+        <!-- Tombol Voice / Mikrofon -->
+        <button type="button" class="btn mic-btn" id="micBtn" aria-label="Input Suara" title="Bicara untuk mengetik (Bahasa Indonesia)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+          </svg>
+        </button>
+
         <button class="send" id="send" aria-label="Kirim"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
       </div>
     </div>
@@ -143,6 +153,7 @@
         <li><strong>AI Chat & Reasoning:</strong> Diskusi bebas, analisis kode, atau tanya jawab umum.</li>
         <li><strong>Writing Assistant:</strong> Gunakan menu <em>Gaya</em> di kanan atas (Formal, Casual, Persuasif, Ringkas) untuk menyesuaikan nada tulisan.</li>
         <li><strong>Image Generation:</strong> Deskripsikan gambar yang ingin dibuat sedetail mungkin.</li>
+        <li><strong>Voice Input:</strong> Klik ikon mikrofon di sebelah lampiran untuk mendiktekan pesan dengan suara.</li>
         <li><strong>Riwayat Chat:</strong> Klik ikon jam atau menu Riwayat Chat untuk membuka kembali percakapan lama.</li>
       </ul>
       <div class="shortcut-box">
@@ -161,6 +172,7 @@
     const featureMenu = document.getElementById('athenaFeatureMenu');
     const helpModal = document.getElementById('athenaHelpModal');
     const inputEl = document.getElementById('input');
+    const micBtn = document.getElementById('micBtn');
 
     // Toggle menu saat logo diklik
     logoBtn.addEventListener('click', (e) => {
@@ -184,7 +196,6 @@
         inputEl.placeholder = 'Tanya Athena atau diskusikan masalah…';
       } else if (mode === 'writing') {
         inputEl.placeholder = 'Masukkan topik atau draf teks yang ingin ditulis/diperbaiki…';
-        // Otomatis buka pilihan Gaya tulisan jika belum terbuka
         const styleMenu = document.getElementById('styleMenu');
         if (styleMenu && !styleMenu.classList.contains('open')) {
           styleMenu.classList.add('open');
@@ -198,7 +209,7 @@
       inputEl.focus();
     };
 
-    // Buka drawer riwayat chat bawaan (memicu klik tombol #historyBtn Anda)
+    // Buka drawer riwayat chat bawaan
     window.openAthenaHistory = function() {
       featureMenu.classList.remove('active');
       const historyBtn = document.getElementById('historyBtn');
@@ -233,6 +244,79 @@
         closeAthenaHelp();
       }
     });
+
+    // ============ FITUR VOICE (SPEECH-TO-TEXT & TEXT-TO-SPEECH) ============
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (micBtn && inputEl) {
+      if (!SpeechRecognition) {
+        micBtn.style.display = 'none';
+      } else {
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'id-ID';
+        recognition.interimResults = true;
+        recognition.continuous = false;
+
+        let isRecording = false;
+        let initialText = '';
+
+        micBtn.addEventListener('click', () => {
+          if (isRecording) {
+            recognition.stop();
+          } else {
+            initialText = inputEl.value ? inputEl.value.trim() + ' ' : '';
+            try {
+              recognition.start();
+            } catch (err) {
+              console.error('Gagal memulai mikrofon:', err);
+            }
+          }
+        });
+
+        recognition.onstart = () => {
+          isRecording = true;
+          micBtn.classList.add('recording');
+          inputEl.placeholder = 'Mendengarkan suara Anda… silakan bicara…';
+        };
+
+        recognition.onresult = (event) => {
+          let transcript = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          inputEl.value = initialText + transcript;
+          inputEl.dispatchEvent(new Event('input'));
+        };
+
+        recognition.onerror = (event) => {
+          if (event.error === 'not-allowed') {
+            alert('Izin mikrofon ditolak. Harap izinkan akses mikrofon di pengaturan browser Anda.');
+          }
+          resetMicUI();
+        };
+
+        recognition.onend = () => {
+          resetMicUI();
+          inputEl.focus();
+        };
+
+        function resetMicUI() {
+          isRecording = false;
+          micBtn.classList.remove('recording');
+          inputEl.placeholder = 'Tanya Athena atau minta bantuan menulis…';
+        }
+      }
+    }
+
+    // Fungsi opsional untuk membacakan balasan AI dengan suara
+    window.speakAthenaReply = function(text) {
+      if (!('speechSynthesis' in window)) return;
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text.replace(/[*#`]/g, ''));
+      utterance.lang = 'id-ID';
+      utterance.rate = 1.05;
+      window.speechSynthesis.speak(utterance);
+    };
   })();
 </script>
 </body>
