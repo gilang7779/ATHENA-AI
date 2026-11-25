@@ -46,14 +46,19 @@ def _clean_key(v):
     return (v or '').strip().strip('"\'').strip()
 
 def _pick_key():
-    """Ambil key pertama yang terisi (mendukung format AIza maupun AQ.)."""
+    """Ambil key Gemini pertama yang terisi (mendukung format AIza maupun AQ.)."""
     for n in ('GEMINI_API_KEY', 'GOOGLE_API_KEY'):
         k = _clean_key(os.getenv(n))
         if k:
             return k
     return ''
 
+def _pick_groq_key():
+    """Ambil key Groq dari environment variable."""
+    return _clean_key(os.getenv('GROQ_API_KEY'))
+
 GOOGLE_API_KEY = _pick_key()
+GROQ_API_KEY = _pick_groq_key()
 
 # Jatah token per pengguna per hari. Ubah lewat .env: TOKEN_BUDGET=100000
 TOKEN_BUDGET = int(os.getenv('TOKEN_BUDGET', '50000'))
@@ -68,6 +73,14 @@ MODELS = {
     },
 }
 DEFAULT_MODEL = 'Gemini'
+
+# 4 Model Groq sebagai failover berurutan setelah Gemini gagal
+GROQ_FALLBACK_MODELS = [
+    "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
+    "qwen/qwen3-32b",
+    "llama-3.1-8b-instant",
+]
 
 WRITING_STYLES = {
     'Formal': 'Gunakan bahasa formal, terstruktur, dan profesional.',
@@ -108,6 +121,7 @@ def build_system_prompt(style: str) -> str:
     return f"{IDENTITY_PROMPT} {WRITING_STYLES.get(style, '')} {SUGGEST_PROMPT}".strip()
 
 SARAN_RE = re.compile(r'\n[\s*_#>`]*-{2,}\s*SARAN\s*-{2,}[\s*_`]*', re.I)
+THINK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.I)
 
 def split_suggestions(text: str) -> Tuple[str, List[str]]:
     """Pisahkan jawaban dari daftar saran topik lanjutan."""
@@ -271,7 +285,7 @@ def call_google_gemini(messages: List[Dict], style: str = 'Formal',
                        media: Optional[List[Tuple[bytes, str]]] = None) -> Tuple[str, int, bool]:
     api_key = _pick_key()
     if not api_key:
-        return "GEMINI_API_KEY belum diisi (cek Environment Variables di Vercel)", 0, False
+        return "GEMINI_API_KEY belum diisi (cek Environment Variables / .env)", 0, False
 
     try:
         # Format AQ. menggunakan Interactions API (v1beta/interactions)
@@ -348,6 +362,54 @@ def call_google_gemini(messages: List[Dict], style: str = 'Formal',
     except Exception as e:
         return f"Gagal memanggil Gemini: {e}", 0, False
 
+
+def call_groq(model_id: str, messages: List[Dict], style: str = 'Formal') -> Tuple[str, int, bool]:
+    """Memanggil satu model Groq spesifik (OpenAI-compatible endpoint)."""
+    api_key = _pick_groq_key()
+    if not api_key:
+        return "GROQ_API_KEY belum diisi (cek Environment Variables / .env)", 0, False
+
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        groq_messages = [{"role": "system", "content": build_system_prompt(style)}] + [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages
+        ]
+        payload = {
+            "model": model_id,
+            "messages": groq_messages,
+            "temperature": 0.7,
+        }
+
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        data = resp.json()
+
+        if not resp.ok:
+            err_msg = data.get('error', {}).get('message', resp.text)
+            return f"Gagal memanggil Groq ({model_id}): {resp.status_code} {err_msg}", 0, False
+
+        choices = data.get('choices', [])
+        if not choices:
+            return f"Groq ({model_id}) tidak memberikan jawaban.", 0, False
+
+        raw_text = choices[0].get('message', {}).get('content') or ''
+        # Bersihkan tag <think>...</think> jika model reasoning menyertakannya
+        text = THINK_RE.sub('', raw_text).strip()
+
+        if not text:
+            return f"Groq ({model_id}) mengembalikan jawaban kosong.", 0, False
+
+        tokens = data.get('usage', {}).get('total_tokens') or estimate_tokens(messages, text)
+        return text, tokens, True
+
+    except Exception as e:
+        return f"Gagal memanggil Groq ({model_id}): {e}", 0, False
+
+
 def get_ai_response(message: str, model: str, style: str,
                     media: Optional[List[Tuple[bytes, str]]] = None,
                     history: Optional[List[Dict]] = None) -> Tuple[str, int, bool]:
@@ -360,7 +422,32 @@ def get_ai_response(message: str, model: str, style: str,
     messages = list(history or []) + [{"role": "user", "content": message}]
 
     if provider == 'google':
-        return call_google_gemini(messages, style, media)
+        # 1. Coba Gemini utama dulu
+        text, tokens, ok = call_google_gemini(messages, style, media)
+        if ok:
+            return text, tokens, True
+
+        # Jika gagal & ada lampiran media (PDF/gambar), tidak bisa dialihkan ke model teks Groq
+        if media:
+            return f"{text} (Lampiran PDF/gambar tidak dapat dialihkan ke model cadangan)", 0, False
+
+        # 2. Failover berurutan ke 4 model Groq jika kunci Groq tersedia
+        if _pick_groq_key():
+            print(f"[Failover] Gemini gagal ({text}). Beralih ke model cadangan Groq...")
+            last_err = text
+            for fallback_id in GROQ_FALLBACK_MODELS:
+                print(f"[Failover] Mencoba {fallback_id}...")
+                fb_text, fb_tokens, fb_ok = call_groq(fallback_id, messages, style)
+                if fb_ok:
+                    print(f"[Failover] Berhasil dijawab oleh {fallback_id}")
+                    return fb_text, fb_tokens, True
+                last_err = fb_text
+                print(f"[Failover] {fallback_id} gagal: {fb_text}")
+
+            return f"Gemini dan semua model cadangan gagal merespons. Error terakhir: {last_err}", 0, False
+
+        return text, 0, False
+
     return "Model tidak didukung", 0, False
 
 # ============ API ENDPOINTS ============
@@ -368,13 +455,16 @@ def get_ai_response(message: str, model: str, style: str,
 @app.route('/api/health', methods=['GET'])
 def health_check():
     current_key = _pick_key()
+    groq_key = _pick_groq_key()
     return jsonify(format_response({
         'status': 'healthy',
-        'version': '2.1.2',
+        'version': '2.2.0',
         'gemini_configured': bool(current_key),
+        'groq_configured': bool(groq_key),
         'key_prefix': current_key[:4],
         'key_len': len(current_key),
         'model_id': MODELS['Gemini']['model_id'],
+        'fallback_models': GROQ_FALLBACK_MODELS,
     }))
 
 @app.route('/api/usage', methods=['GET'])
@@ -554,6 +644,8 @@ def server_error(error):
 if __name__ == '__main__':
     if not GOOGLE_API_KEY:
         print("⚠️  WARNING: GEMINI_API_KEY belum diisi di file .env!")
+    if not GROQ_API_KEY:
+        print("⚠️  WARNING: GROQ_API_KEY belum diisi di file .env (failover Groq nonaktif)!")
     # 127.0.0.1 = hanya bisa diakses dari komputer ini (aman untuk debug=True).
     # Untuk Render/hosting, jalankan lewat gunicorn: gunicorn app:app
     app.run(debug=True, host='127.0.0.1', port=5000)
