@@ -17,7 +17,7 @@ const tokLeft = $('tokLeft');
 const tokMax = $('tokMax');
 const tokBar = $('tokBar');
 
-const USER_NAME = 'Jason';
+const USER_NAME = 'Athena';
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let threadId = null;
