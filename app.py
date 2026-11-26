@@ -60,7 +60,6 @@ SUPABASE_SERVICE_KEY = _clean_key(os.getenv('SUPABASE_SERVICE_ROLE_KEY')) or SUP
 
 TOKEN_BUDGET = int(os.getenv('TOKEN_BUDGET', '50000'))
 HISTORY_LIMIT = 20
-GUEST_MESSAGE_LIMIT = 3
 
 MODELS = {
     'Gemini': {
@@ -623,19 +622,6 @@ def chat():
         thread_id = data.get('thread_id')
         owner_id, user = resolve_owner(data.get('client_id'))
         is_user = bool(user)
-
-        if not is_user:
-            guest_msgs = sum(
-                sum(1 for m in msgs if m.get('role') == 'user')
-                for tid, msgs in threads_db.items()
-                if threads_meta.get(tid, {}).get('client_id') == owner_id
-            )
-            if guest_msgs >= GUEST_MESSAGE_LIMIT:
-                return jsonify(format_response(
-                    {'requires_auth': True, 'guest_limit': GUEST_MESSAGE_LIMIT},
-                    status='error',
-                    error=f'Batas {GUEST_MESSAGE_LIMIT} pesan untuk tamu sudah habis. Silakan masuk atau daftar akun untuk melanjutkan.'
-                )), 403
 
         current = get_usage(owner_id, is_user)
         if current['remaining'] <= 0:
