@@ -64,7 +64,7 @@
   <button class="ico" data-tip="Riwayat chat" id="historyBtn" aria-label="Riwayat chat"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
   <div class="spacer"></div>
   <button class="ico" data-tip="Ganti tema" id="themeBtn" aria-label="Ganti tema"><svg class="theme-ico sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg><svg class="theme-ico moon" viewBox="0 0 24 24"><path d="M21 13a9 9 0 11-10-10 7 7 0 0010 10z"/></svg></button>
-  <div class="avatar" title="Jason">J</div>
+  <button type="button" class="avatar" id="userAvatar" title="Masuk / Akun" style="border:0;cursor:pointer;">?</button>
 </aside>
 
 <main>
@@ -165,12 +165,41 @@
   </div>
 </div>
 
+<!-- Modal Login / Register -->
+<div id="authModal" class="athena-modal-overlay" role="dialog" aria-modal="true" aria-label="Akun Athena">
+  <div class="athena-modal-box">
+    <div class="modal-header">
+      <h3 id="authModalTitle">Masuk ke Athena</h3>
+      <button type="button" id="authCloseBtn" class="close-modal-btn" aria-label="Tutup">&times;</button>
+    </div>
+    <div class="modal-body" id="authLoggedOutView">
+      <form id="authForm" style="display:flex;flex-direction:column;gap:10px;">
+        <input type="text" id="authName" placeholder="Nama lengkap" style="display:none;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;">
+        <input type="email" id="authEmail" placeholder="Alamat email" required style="padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;">
+        <input type="password" id="authPassword" placeholder="Password (min. 6 karakter)" required minlength="6" style="padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;">
+        <p id="authError" style="color:var(--danger);font-size:13px;display:none;margin:0;"></p>
+        <button type="submit" class="btn dark" id="authSubmitBtn" style="justify-content:center;padding:10px;">Masuk</button>
+      </form>
+      <p style="margin-top:12px;font-size:13px;color:var(--muted);text-align:center;">
+        <span id="authSwitchText">Belum punya akun?</span>
+        <button type="button" id="authSwitchBtn" style="border:0;background:none;color:var(--accent);font:inherit;font-weight:600;cursor:pointer;">Daftar sekarang</button>
+      </p>
+    </div>
+    <div class="modal-body" id="authLoggedInView" style="display:none;">
+      <p>Masuk sebagai <strong id="profileName"></strong></p>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:16px;" id="profileEmail"></p>
+      <button type="button" class="btn" id="logoutBtn" style="width:100%;justify-content:center;color:var(--danger);border-color:var(--danger);">Keluar (Logout)</button>
+    </div>
+  </div>
+</div>
+
 <script src="script.js"></script>
 <script>
   (function() {
     const logoBtn = document.getElementById('athenaLogoBtn');
     const featureMenu = document.getElementById('athenaFeatureMenu');
     const helpModal = document.getElementById('athenaHelpModal');
+    const authModal = document.getElementById('authModal');
     const inputEl = document.getElementById('input');
     const micBtn = document.getElementById('micBtn');
 
@@ -242,6 +271,7 @@
       if (e.key === 'Escape') {
         featureMenu.classList.remove('active');
         closeAthenaHelp();
+        authModal?.classList.remove('show');
       }
     });
 
