@@ -59,7 +59,7 @@ SUPABASE_ANON_KEY = _clean_key(os.getenv('SUPABASE_ANON_KEY'))
 SUPABASE_SERVICE_KEY = _clean_key(os.getenv('SUPABASE_SERVICE_ROLE_KEY')) or SUPABASE_ANON_KEY
 
 TOKEN_BUDGET = int(os.getenv('TOKEN_BUDGET', '50000'))
-HISTORY_LIMIT = 20
+HISTORY_LIMIT = 3
 
 MODELS = {
     'Gemini': {
