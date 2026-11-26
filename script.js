@@ -7,8 +7,6 @@ const thread = $('thread');
 const themeBtn = $('themeBtn');
 const newThreadBtn = $('newThread');
 const sendBtn = $('send');
-const fileInput = $('fileInput');
-const filesBox = $('files');
 const greetEl = $('greet');
 const subEl = $('sub');
 const welcomeEl = $('welcome');
@@ -21,7 +19,6 @@ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').match
 
 let threadId = null;
 let busy = false;
-let attached = [];
 
 // ============ AUTH STATE ============
 let authToken = localStorage.getItem('athena_token') || '';
@@ -187,58 +184,6 @@ function autosize() {
 }
 input.addEventListener('input', autosize);
 
-// ============ FILE UPLOAD ============
-
-const MAX_FILE = 10 * 1024 * 1024;
-const MAX_TOTAL = 20 * 1024 * 1024;
-
-function renderFiles() {
-  filesBox.innerHTML = '';
-  attached.forEach((f, i) => {
-    const chip = document.createElement('div');
-    chip.className = 'chip';
-    const name = document.createElement('span');
-    name.textContent = '📎 ' + f.name;
-    const rm = document.createElement('button');
-    rm.textContent = '×';
-    rm.setAttribute('aria-label', 'Hapus ' + f.name);
-    rm.onclick = () => { attached.splice(i, 1); renderFiles(); };
-    chip.append(name, rm);
-    filesBox.appendChild(chip);
-  });
-}
-
-function openFilePicker() {
-  document.querySelectorAll('.menu').forEach((m) => m.classList.remove('open'));
-  fileInput.click();
-}
-
-$('uploadItem').onclick = openFilePicker;
-
-document.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
-    e.preventDefault();
-    openFilePicker();
-  }
-});
-
-fileInput.onchange = () => {
-  for (const file of fileInput.files) {
-    const total = attached.reduce((n, f) => n + f.size, 0);
-    if (file.size > MAX_FILE) {
-      alert(file.name + ' terlalu besar (maks 10 MB per file).');
-      continue;
-    }
-    if (total + file.size > MAX_TOTAL) {
-      alert('Total lampiran melebihi 20 MB.');
-      break;
-    }
-    attached.push(file);
-  }
-  fileInput.value = '';
-  renderFiles();
-};
-
 // ============ TOKEN METER ============
 
 function updateTokens(u) {
@@ -337,10 +282,10 @@ function setChatting(on) {
   center.classList.toggle('chatting', on);
 }
 
-function addUserMessage(text, names, scroll = true) {
+function addUserMessage(text, scroll = true) {
   const div = document.createElement('div');
   div.className = 'msg user';
-  div.textContent = (text || '') + (names.length ? (text ? '  ' : '') + '📎 ' + names.join(', ') : '');
+  div.textContent = text || '';
   thread.appendChild(div);
   if (scroll) scrollDown(true);
 }
@@ -458,23 +403,20 @@ function showSuggestions(list) {
 async function submitMessage(textOverride) {
   if (busy) return;
   const value = (typeof textOverride === 'string' ? textOverride : input.value).trim();
-  if (!value && !attached.length) return;
+  if (!value) return;
 
   busy = true;
   sendBtn.disabled = true;
 
-  const files = attached;
   setChatting(true);
   clearSuggestions();
-  addUserMessage(value, files.map((f) => f.name));
+  addUserMessage(value);
 
   input.value = '';
   autosize();
-  attached = [];
-  renderFiles();
 
   const typing = showTyping();
-  const result = await callAIAPI(value, files);
+  const result = await callAIAPI(value);
   typing.remove();
 
   if (result.usage) updateTokens(result.usage);
@@ -511,8 +453,6 @@ function startNewThread() {
   setChatting(false);
   input.value = '';
   autosize();
-  attached = [];
-  renderFiles();
   center.scrollTop = 0;
   input.focus();
   playHero();
@@ -526,7 +466,7 @@ newThreadBtn.onclick = () => {
 
 // ============ API ============
 
-async function callAIAPI(message, files) {
+async function callAIAPI(message) {
   try {
     const form = new FormData();
     form.append('message', message);
@@ -534,7 +474,6 @@ async function callAIAPI(message, files) {
     form.append('style', currentStyle());
     form.append('client_id', CLIENT_ID);
     if (threadId) form.append('thread_id', threadId);
-    files.forEach((f) => form.append('files', f));
 
     const response = await fetch('/api/chat', {
       method: 'POST',
@@ -667,7 +606,7 @@ async function openThread(id) {
 
     const msgs = json.data.messages || [];
     msgs.forEach((m) => {
-      if (m.role === 'user') addUserMessage(m.content, [], false);
+      if (m.role === 'user') addUserMessage(m.content, false);
       else restoreAIReply(m);
     });
 
