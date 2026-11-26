@@ -32,14 +32,6 @@
         </div>
       </button>
 
-      <button type="button" class="menu-item" onclick="selectAthenaFeature('image')">
-        <span>🎨</span>
-        <div>
-          <strong>Image Generation</strong>
-          <small>Buat gambar dari deskripsi teks</small>
-        </div>
-      </button>
-
       <div class="menu-divider"></div>
       <div class="menu-header">Navigasi & Dukungan</div>
 
@@ -152,7 +144,6 @@
       <ul>
         <li><strong>AI Chat & Reasoning:</strong> Diskusi bebas, analisis kode, atau tanya jawab umum.</li>
         <li><strong>Writing Assistant:</strong> Gunakan menu <em>Gaya</em> di kanan atas (Formal, Casual, Persuasif, Ringkas) untuk menyesuaikan nada tulisan.</li>
-        <li><strong>Image Generation:</strong> Deskripsikan gambar yang ingin dibuat sedetail mungkin.</li>
         <li><strong>Voice Input:</strong> Klik ikon mikrofon di sebelah lampiran untuk mendiktekan pesan dengan suara.</li>
         <li><strong>Riwayat Chat:</strong> Klik ikon jam atau menu Riwayat Chat untuk membuka kembali percakapan lama.</li>
       </ul>
@@ -228,11 +219,6 @@
         const styleMenu = document.getElementById('styleMenu');
         if (styleMenu && !styleMenu.classList.contains('open')) {
           styleMenu.classList.add('open');
-        }
-      } else if (mode === 'image') {
-        inputEl.placeholder = 'Deskripsikan gambar yang ingin dibuat (contoh: Pemandangan kota futuristik malam hari)…';
-        if (!inputEl.value.trim()) {
-          inputEl.value = '/imagine ';
         }
       }
       inputEl.focus();
