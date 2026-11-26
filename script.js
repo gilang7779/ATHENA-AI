@@ -17,14 +17,41 @@ const tokLeft = $('tokLeft');
 const tokMax = $('tokMax');
 const tokBar = $('tokBar');
 
-const USER_NAME = 'Athena';
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let threadId = null;
 let busy = false;
-let attached = []; // objek File
+let attached = [];
 
-// ID anonim per browser, dipakai server untuk menghitung jatah token harian
+// ============ AUTH STATE ============
+let authToken = localStorage.getItem('athena_token') || '';
+let currentUser = (() => {
+  try { return JSON.parse(localStorage.getItem('athena_user') || 'null'); } catch (e) { return null; }
+})();
+
+function authHeaders(extra = {}) {
+  const h = { ...extra };
+  if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+  return h;
+}
+
+function getDisplayName() {
+  return (currentUser && currentUser.name) ? currentUser.name : 'Athena';
+}
+
+function updateUserUI() {
+  const avatar = $('userAvatar');
+  if (!avatar) return;
+  if (currentUser) {
+    avatar.textContent = (currentUser.name || currentUser.email || 'U').charAt(0).toUpperCase();
+    avatar.title = `${currentUser.name} (${currentUser.email})`;
+  } else {
+    avatar.textContent = '?';
+    avatar.title = 'Klik untuk Masuk / Daftar';
+  }
+}
+
+// ID anonim cadangan jika user belum login
 function getClientId() {
   try {
     let id = localStorage.getItem('clientId');
@@ -105,11 +132,11 @@ async function playHero() {
   const run = ++heroRun;
   welcomeEl.textContent = isReturning ? 'Selamat datang kembali' : 'Selamat datang di Athena';
   welcomeEl.classList.remove('show');
-  void welcomeEl.offsetWidth; // restart animasi
+  void welcomeEl.offsetWidth;
   welcomeEl.classList.add('show');
   greetEl.textContent = '';
   subEl.textContent = '';
-  await typeInto(greetEl, `${greetingWord()}, ${USER_NAME}`, run);
+  await typeInto(greetEl, `${greetingWord()},${getDisplayName()}`, run);
   if (run !== heroRun) return;
   await typeInto(subEl, 'Apa yang sedang kamu pikirkan?', run);
 }
@@ -122,7 +149,7 @@ function toggleMenu(menuId) {
   document.querySelectorAll('.menu').forEach((m) => m.classList.remove('open'));
   if (!isOpen) menu.classList.add('open');
 }
-window.toggleMenu = toggleMenu; // dipakai atribut onclick di HTML
+window.toggleMenu = toggleMenu;
 
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.menu')) {
@@ -130,7 +157,6 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Menu pilihan (model & gaya)
 document.querySelectorAll('.menu[data-pick] li').forEach((li) => {
   li.onclick = () => {
     const menu = li.closest('.menu');
@@ -163,8 +189,8 @@ input.addEventListener('input', autosize);
 
 // ============ FILE UPLOAD ============
 
-const MAX_FILE = 10 * 1024 * 1024;  // 10 MB per file
-const MAX_TOTAL = 20 * 1024 * 1024; // 20 MB total
+const MAX_FILE = 10 * 1024 * 1024;
+const MAX_TOTAL = 20 * 1024 * 1024;
 
 function renderFiles() {
   filesBox.innerHTML = '';
@@ -230,7 +256,9 @@ function updateTokens(u) {
 
 async function loadUsage() {
   try {
-    const res = await fetch('/api/usage?client_id=' + encodeURIComponent(CLIENT_ID));
+    const res = await fetch('/api/usage?client_id=' + encodeURIComponent(CLIENT_ID), {
+      headers: authHeaders(),
+    });
     const json = await res.json();
     updateTokens(json.data && json.data.usage);
   } catch (e) {
@@ -239,7 +267,7 @@ async function loadUsage() {
   }
 }
 
-// ============ MARKDOWN (ringan, aman dari HTML injection) ============
+// ============ MARKDOWN ============
 
 function renderMarkdown(src) {
   const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -334,7 +362,6 @@ function showTyping() {
   return div;
 }
 
-// Efek mengetik: teks muncul bertahap, dirender ulang sebagai Markdown
 function typewriter(bubble, body, text) {
   return new Promise((resolve) => {
     if (reduceMotion) { body.innerHTML = renderMarkdown(text); return resolve(); }
@@ -396,7 +423,6 @@ async function showAIReply(text, metaText) {
   if (nearBottom()) scrollDown(true);
 }
 
-// Tampilkan jawaban lama (dari riwayat) tanpa animasi
 function restoreAIReply(m) {
   const { bubble, body } = createAIBubble();
   body.innerHTML = renderMarkdown(m.content);
@@ -510,7 +536,11 @@ async function callAIAPI(message, files) {
     if (threadId) form.append('thread_id', threadId);
     files.forEach((f) => form.append('files', f));
 
-    const response = await fetch('/api/chat', { method: 'POST', body: form });
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    });
     const json = await response.json();
 
     const usage = json.data && json.data.usage;
@@ -559,7 +589,9 @@ function dayGroup(iso) {
 
 async function loadHistory() {
   try {
-    const res = await fetch('/api/threads?client_id=' + encodeURIComponent(CLIENT_ID));
+    const res = await fetch('/api/threads?client_id=' + encodeURIComponent(CLIENT_ID), {
+      headers: authHeaders(),
+    });
     const json = await res.json();
     historyCache = (json.data && json.data.threads) || [];
     renderHistory();
@@ -618,7 +650,9 @@ async function openThread(id) {
   if (id === threadId) { closeDrawer(); return; }
 
   try {
-    const res = await fetch(`/api/threads/${encodeURIComponent(id)}?client_id=${encodeURIComponent(CLIENT_ID)}`);
+    const res = await fetch(`/api/threads/${encodeURIComponent(id)}?client_id=${encodeURIComponent(CLIENT_ID)}`, {
+      headers: authHeaders(),
+    });
     const json = await res.json();
     if (json.status !== 'success') {
       alert(json.error || 'Riwayat tidak ditemukan.');
@@ -626,7 +660,7 @@ async function openThread(id) {
       return;
     }
 
-    heroRun++; // hentikan animasi salam kalau masih berjalan
+    heroRun++;
     thread.innerHTML = '';
     threadId = id;
     setChatting(true);
@@ -655,13 +689,129 @@ async function deleteThread(id, title) {
   }
   if (!confirm(`Hapus chat "${title}"?`)) return;
   try {
-    await fetch(`/api/threads/${encodeURIComponent(id)}?client_id=${encodeURIComponent(CLIENT_ID)}`, { method: 'DELETE' });
+    await fetch(`/api/threads/${encodeURIComponent(id)}?client_id=${encodeURIComponent(CLIENT_ID)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
   } catch (e) {}
   if (id === threadId) startNewThread();
   loadHistory();
 }
 
+// ============ AUTH MODAL LOGIC ============
+
+(function initAuth() {
+  const modal = $('authModal');
+  const avatarBtn = $('userAvatar');
+  const closeBtn = $('authCloseBtn');
+  const form = $('authForm');
+  const switchBtn = $('authSwitchBtn');
+  const switchText = $('authSwitchText');
+  const titleEl = $('authModalTitle');
+  const nameInput = $('authName');
+  const submitBtn = $('authSubmitBtn');
+  const errEl = $('authError');
+  const outView = $('authLoggedOutView');
+  const inView = $('authLoggedInView');
+  const logoutBtn = $('logoutBtn');
+  if (!modal || !avatarBtn) return;
+
+  let isRegister = false;
+
+  function syncModalView() {
+    errEl.style.display = 'none';
+    if (currentUser) {
+      titleEl.textContent = 'Profil Pengguna';
+      outView.style.display = 'none';
+      inView.style.display = 'block';
+      $('profileName').textContent = currentUser.name;
+      $('profileEmail').textContent = currentUser.email;
+    } else {
+      titleEl.textContent = isRegister ? 'Daftar Akun Athena' : 'Masuk ke Athena';
+      outView.style.display = 'block';
+      inView.style.display = 'none';
+      nameInput.style.display = isRegister ? 'block' : 'none';
+      nameInput.required = isRegister;
+      submitBtn.textContent = isRegister ? 'Daftar' : 'Masuk';
+      switchText.textContent = isRegister ? 'Sudah punya akun?' : 'Belum punya akun?';
+      switchBtn.textContent = isRegister ? 'Masuk di sini' : 'Daftar sekarang';
+    }
+  }
+
+  avatarBtn.onclick = () => {
+    syncModalView();
+    modal.classList.add('show');
+  };
+
+  closeBtn.onclick = () => modal.classList.remove('show');
+  modal.onclick = (e) => { if (e.target === modal) modal.classList.remove('show'); };
+
+  switchBtn.onclick = () => {
+    isRegister = !isRegister;
+    syncModalView();
+  };
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    errEl.style.display = 'none';
+    submitBtn.disabled = true;
+
+    const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
+    const payload = {
+      email: $('authEmail').value.trim(),
+      password: $('authPassword').value,
+      ...(isRegister ? { name: nameInput.value.trim() } : {}),
+    };
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+
+      if (json.status !== 'success') {
+        errEl.textContent = json.error || 'Autentikasi gagal.';
+        errEl.style.display = 'block';
+      } else if (json.data.needs_verification) {
+        alert(json.data.message);
+        isRegister = false;
+        syncModalView();
+      } else {
+        authToken = json.data.access_token;
+        currentUser = json.data.user;
+        localStorage.setItem('athena_token', authToken);
+        localStorage.setItem('athena_user', JSON.stringify(currentUser));
+        updateUserUI();
+        modal.classList.remove('show');
+        startNewThread();
+        loadUsage();
+        loadHistory();
+      }
+    } catch (err) {
+      errEl.textContent = 'Gagal terhubung ke server.';
+      errEl.style.display = 'block';
+    } finally {
+      submitBtn.disabled = false;
+    }
+  };
+
+  logoutBtn.onclick = () => {
+    authToken = '';
+    currentUser = null;
+    localStorage.removeItem('athena_token');
+    localStorage.removeItem('athena_user');
+    updateUserUI();
+    modal.classList.remove('show');
+    startNewThread();
+    loadUsage();
+    loadHistory();
+  };
+})();
+
 // ============ INIT ============
 
+updateUserUI();
 playHero();
 loadUsage();
