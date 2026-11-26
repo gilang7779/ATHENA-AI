@@ -89,14 +89,7 @@
         <svg viewBox="0 0 24 24"><path d="M12 2l2.2 6.3L21 10l-6.8 1.7L12 18l-2.2-6.3L3 10l6.8-1.7z"/></svg>
         <textarea id="input" placeholder="Tanya Athena atau minta bantuan menulis…" rows="2"></textarea>
       </div>
-      <div class="files" id="files"></div>
       <div class="tools">
-        <div class="menu up" id="attachMenu">
-          <button class="btn" id="attachBtn" onclick="toggleMenu('attachMenu')" aria-label="Lampirkan file">📎</button>
-          <ul><li id="uploadItem">Upload or add files <span class="kbd">Ctrl+U</span></li></ul>
-        </div>
-        <input type="file" id="fileInput" multiple hidden accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,.csv,.json,.js,.py,.html,.css,.xml,.yml,.yaml,.log,.sql">
-
         <!-- Tombol Voice / Mikrofon -->
         <button type="button" class="btn mic-btn" id="micBtn" aria-label="Input Suara" title="Bicara untuk mengetik (Bahasa Indonesia)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -144,13 +137,12 @@
       <ul>
         <li><strong>AI Chat & Reasoning:</strong> Diskusi bebas, analisis kode, atau tanya jawab umum.</li>
         <li><strong>Writing Assistant:</strong> Gunakan menu <em>Gaya</em> di kanan atas (Formal, Casual, Persuasif, Ringkas) untuk menyesuaikan nada tulisan.</li>
-        <li><strong>Voice Input:</strong> Klik ikon mikrofon di sebelah lampiran untuk mendiktekan pesan dengan suara.</li>
+        <li><strong>Voice Input:</strong> Klik ikon mikrofon di sebelah tombol kirim untuk mendiktekan pesan dengan suara.</li>
         <li><strong>Riwayat Chat:</strong> Klik ikon jam atau menu Riwayat Chat untuk membuka kembali percakapan lama.</li>
       </ul>
       <div class="shortcut-box">
         <span><code>Enter</code> : Kirim</span>
         <span><code>Shift + Enter</code> : Baris baru</span>
-        <span><code>Ctrl + U</code> : Lampirkan file</span>
       </div>
     </div>
   </div>
