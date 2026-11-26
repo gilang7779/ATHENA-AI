@@ -16,6 +16,7 @@ const tokMax = $('tokMax');
 const tokBar = $('tokBar');
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isMobile = () => window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 768;
 
 let threadId = null;
 let busy = false;
@@ -142,6 +143,7 @@ async function playHero() {
 
 function toggleMenu(menuId) {
   const menu = $(menuId);
+  if (!menu) return;
   const isOpen = menu.classList.contains('open');
   document.querySelectorAll('.menu').forEach((m) => m.classList.remove('open'));
   if (!isOpen) menu.classList.add('open');
@@ -438,8 +440,9 @@ async function submitMessage(textOverride) {
 
 sendBtn.onclick = () => submitMessage();
 
+// Di desktop: Enter = kirim, Shift+Enter = baris baru. Di HP (mobile): Enter = baris baru.
 input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter' && !e.shiftKey && !isMobile()) {
     e.preventDefault();
     submitMessage();
   }
