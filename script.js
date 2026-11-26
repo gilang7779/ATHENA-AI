@@ -16,8 +16,6 @@ const tokMax = $('tokMax');
 const tokBar = $('tokBar');
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const isMobile = () => window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 768;
-const GUEST_MESSAGE_LIMIT = 3;
 
 let threadId = null;
 let busy = false;
@@ -135,7 +133,7 @@ async function playHero() {
   welcomeEl.classList.add('show');
   greetEl.textContent = '';
   subEl.textContent = '';
-  await typeInto(greetEl, `${greetingWord()}, ${getDisplayName()}`, run);
+  await typeInto(greetEl, `${greetingWord()},${getDisplayName()}`, run);
   if (run !== heroRun) return;
   await typeInto(subEl, 'Apa yang sedang kamu pikirkan?', run);
 }
@@ -144,7 +142,6 @@ async function playHero() {
 
 function toggleMenu(menuId) {
   const menu = $(menuId);
-  if (!menu) return;
   const isOpen = menu.classList.contains('open');
   document.querySelectorAll('.menu').forEach((m) => m.classList.remove('open'));
   if (!isOpen) menu.classList.add('open');
@@ -408,20 +405,6 @@ async function submitMessage(textOverride) {
   const value = (typeof textOverride === 'string' ? textOverride : input.value).trim();
   if (!value) return;
 
-  // Batasi maksimal 3 pesan untuk pengguna tamu (belum login)
-  if (!currentUser) {
-    const guestCount = Number(localStorage.getItem('athena_guest_count') || '0');
-    if (guestCount >= GUEST_MESSAGE_LIMIT) {
-      const limitMsg = `Batas ${GUEST_MESSAGE_LIMIT} pesan gratis untuk tamu sudah habis. Silakan masuk atau daftar dulu.`;
-      if (window.openAuthModal) {
-        window.openAuthModal(limitMsg);
-      } else {
-        alert(limitMsg);
-      }
-      return;
-    }
-  }
-
   busy = true;
   sendBtn.disabled = true;
 
@@ -440,14 +423,7 @@ async function submitMessage(textOverride) {
 
   if (!result.ok) {
     addError(result.error);
-    if (result.requiresAuth && window.openAuthModal) {
-      window.openAuthModal(result.error);
-    }
   } else {
-    if (!currentUser) {
-      const nextCount = Number(localStorage.getItem('athena_guest_count') || '0') + 1;
-      localStorage.setItem('athena_guest_count', String(nextCount));
-    }
     const d = result.data;
     if (d.thread_id) threadId = d.thread_id;
     loadHistory();
@@ -462,9 +438,8 @@ async function submitMessage(textOverride) {
 
 sendBtn.onclick = () => submitMessage();
 
-// Di desktop: Enter = kirim, Shift+Enter = baris baru. Di HP (mobile): Enter = baris baru.
 input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !isMobile()) {
+  if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     submitMessage();
   }
@@ -509,12 +484,7 @@ async function callAIAPI(message) {
 
     const usage = json.data && json.data.usage;
     if (json.status !== 'success') {
-      return {
-        ok: false,
-        error: json.error || 'Terjadi kesalahan',
-        usage,
-        requiresAuth: !!(json.data && json.data.requires_auth),
-      };
+      return { ok: false, error: json.error || 'Terjadi kesalahan', usage };
     }
     return { ok: true, data: json.data, usage };
   } catch (error) {
@@ -712,16 +682,6 @@ async function deleteThread(id, title) {
     modal.classList.add('show');
   };
 
-  window.openAuthModal = (msg) => {
-    isRegister = false;
-    syncModalView();
-    if (msg) {
-      errEl.textContent = msg;
-      errEl.style.display = 'block';
-    }
-    modal.classList.add('show');
-  };
-
   closeBtn.onclick = () => modal.classList.remove('show');
   modal.onclick = (e) => { if (e.target === modal) modal.classList.remove('show'); };
 
@@ -772,3 +732,25 @@ async function deleteThread(id, title) {
       errEl.textContent = 'Gagal terhubung ke server.';
       errEl.style.display = 'block';
     } finally {
+      submitBtn.disabled = false;
+    }
+  };
+
+  logoutBtn.onclick = () => {
+    authToken = '';
+    currentUser = null;
+    localStorage.removeItem('athena_token');
+    localStorage.removeItem('athena_user');
+    updateUserUI();
+    modal.classList.remove('show');
+    startNewThread();
+    loadUsage();
+    loadHistory();
+  };
+})();
+
+// ============ INIT ============
+
+updateUserUI();
+playHero();
+loadUsage();
