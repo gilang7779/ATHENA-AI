@@ -1,817 +1,805 @@
-// ============ ELEMENTS ============
-const $ = (id) => document.getElementById(id);
-const root = document.documentElement;
-const center = $('center');
-const input = $('input');
-const thread = $('thread');
-const themeBtn = $('themeBtn');
-const newThreadBtn = $('newThread');
-const sendBtn = $('send');
-const fileInput = $('fileInput');
-const filesBox = $('files');
-const greetEl = $('greet');
-const subEl = $('sub');
-const welcomeEl = $('welcome');
-const meter = $('tokenMeter');
-const tokLeft = $('tokLeft');
-const tokMax = $('tokMax');
-const tokBar = $('tokBar');
+"""
+Flask backend untuk AI Writing Platform (Athena)
+Endpoint chat, autentikasi email (Supabase), riwayat percakapan, dan kuota token.
+"""
 
-const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from dotenv import load_dotenv
+from datetime import datetime, date, timezone
+import json
+import os
+import re
+import requests
+import uuid
+from typing import Dict, List, Optional, Tuple
 
-let threadId = null;
-let busy = false;
-let attached = [];
+load_dotenv()
 
-// ============ AUTH STATE ============
-let authToken = localStorage.getItem('athena_token') || '';
-let currentUser = (() => {
-  try { return JSON.parse(localStorage.getItem('athena_user') || 'null'); } catch (e) { return null; }
-})();
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-function authHeaders(extra = {}) {
-  const h = { ...extra };
-  if (authToken) h['Authorization'] = 'Bearer ' + authToken;
-  return h;
+app = Flask(__name__, static_folder=None)
+app.config['MAX_CONTENT_LENGTH'] = 25 * 1024 * 1024
+CORS(app)
+
+# ============ SERVE FRONTEND FILES ============
+
+@app.route('/')
+def serve_index():
+    return send_from_directory(BASE_DIR, 'index.html')
+
+@app.route('/styles.css')
+def serve_css():
+    return send_from_directory(BASE_DIR, 'styles.css')
+
+@app.route('/script.js')
+def serve_js():
+    return send_from_directory(BASE_DIR, 'script.js')
+
+# ============ CONFIGURATION ============
+
+def _clean_key(v):
+    return (v or '').strip().strip('"\'').strip()
+
+def _pick_key():
+    for n in ('GEMINI_API_KEY', 'GOOGLE_API_KEY'):
+        k = _clean_key(os.getenv(n))
+        if k:
+            return k
+    return ''
+
+def _pick_groq_key():
+    return _clean_key(os.getenv('GROQ_API_KEY'))
+
+GOOGLE_API_KEY = _pick_key()
+GROQ_API_KEY = _pick_groq_key()
+
+SUPABASE_URL = _clean_key(os.getenv('SUPABASE_URL')).rstrip('/')
+SUPABASE_ANON_KEY = _clean_key(os.getenv('SUPABASE_ANON_KEY'))
+SUPABASE_SERVICE_KEY = _clean_key(os.getenv('SUPABASE_SERVICE_ROLE_KEY')) or SUPABASE_ANON_KEY
+
+TOKEN_BUDGET = int(os.getenv('TOKEN_BUDGET', '50000'))
+HISTORY_LIMIT = 20
+GUEST_MESSAGE_LIMIT = 3
+
+MODELS = {
+    'Gemini': {
+        'provider': 'google',
+        'model_id': 'gemini-3.5-flash-lite',
+    },
+}
+DEFAULT_MODEL = 'Gemini'
+
+GROQ_FALLBACK_MODELS = [
+    "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
+    "qwen/qwen3-32b",
+    "llama-3.1-8b-instant",
+]
+
+WRITING_STYLES = {
+    'Formal': 'Gunakan bahasa formal, terstruktur, dan profesional.',
+    'Casual': 'Gunakan bahasa santai, hangat, dan conversational seperti ngobrol dengan teman.',
+    'Persuasif': 'Gunakan teknik persuasi dan argumen yang kuat.',
+    'Ringkas': 'Buat respons singkat dan to-the-point.',
 }
 
-function getDisplayName() {
-  return (currentUser && currentUser.name) ? currentUser.name : 'Athena';
+# ============ IDENTITAS ASISTEN ============
+ASSISTANT_NAME = 'Athena'
+ASSISTANT_CREATOR = 'A,G,L,N'
+
+IDENTITY_PROMPT = (
+    f"Namamu adalah {ASSISTANT_NAME}, asisten penulisan AI yang membantu. "
+    f"Kamu dikembangkan oleh {ASSISTANT_CREATOR}. "
+    f"Jika ada yang bertanya siapa yang membuat atau mengembangkanmu, "
+    f"jawab bahwa kamu adalah {ASSISTANT_NAME}, dikembangkan oleh {ASSISTANT_CREATOR}. "
+    f"Jika ditanya model bahasa apa yang ada di balik layar, jawab bahwa "
+    f"{ASSISTANT_NAME} berjalan di atas model bahasa pihak ketiga dan kamu tidak "
+    f"mengetahui detail teknisnya. "
+    f"Jangan menyebut Google, OpenAI, Anthropic, Meta, atau perusahaan lain "
+    f"sebagai pembuatmu."
+)
+
+SUGGEST_MARK = '---SARAN---'
+SUGGEST_PROMPT = (
+    "Gunakan format Markdown seperlunya (daftar, **tebal**, blok kode). "
+    f"Setelah jawabanmu selesai, tambahkan satu baris berisi persis {SUGGEST_MARK} "
+    "lalu tepat 3 pertanyaan lanjutan yang singkat (maksimal 8 kata), nyambung dengan "
+    "topik pembicaraan sebelumnya dan jawabanmu, ditulis dari sudut pandang pengguna, "
+    "satu per baris, tanpa nomor, tanda hubung, atau tanda kutip. "
+    "Jangan menyebut atau menjelaskan bagian ini dalam jawabanmu."
+)
+
+def build_system_prompt(style: str) -> str:
+    return f"{IDENTITY_PROMPT} {WRITING_STYLES.get(style, '')} {SUGGEST_PROMPT}".strip()
+
+SARAN_RE = re.compile(r'\n[\s*_#>`]*-{2,}\s*SARAN\s*-{2,}[\s*_`]*', re.I)
+THINK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.I)
+
+def split_suggestions(text: str) -> Tuple[str, List[str]]:
+    parts = SARAN_RE.split(text, maxsplit=1)
+    answer = parts[0].rstrip()
+    suggestions: List[str] = []
+    if len(parts) > 1:
+        for line in parts[1].splitlines():
+            line = re.sub(r'^[\s\-\*\u2022\d\.\)]+', '', line).strip().strip('"\'')
+            if line and len(line) <= 90:
+                suggestions.append(line)
+            if len(suggestions) == 3:
+                break
+    return answer, suggestions
+
+# ============ FILE UPLOAD ============
+
+TEXT_EXT = {
+    '.txt', '.md', '.csv', '.json', '.js', '.py', '.html', '.css',
+    '.xml', '.yml', '.yaml', '.log', '.sql',
+}
+MEDIA_MIME = {
+    '.pdf': 'application/pdf',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
 }
 
-function updateUserUI() {
-  const avatar = $('userAvatar');
-  if (!avatar) return;
-  if (currentUser) {
-    avatar.textContent = (currentUser.name || currentUser.email || 'U').charAt(0).toUpperCase();
-    avatar.title = `${currentUser.name} (${currentUser.email})`;
-  } else {
-    avatar.textContent = '?';
-    avatar.title = 'Klik untuk Masuk / Daftar';
-  }
-}
-
-// ID anonim cadangan jika user belum login
-function getClientId() {
-  try {
-    let id = localStorage.getItem('clientId');
-    if (!id) {
-      const raw = (window.crypto && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : Date.now() + Math.random().toString(36).slice(2);
-      id = String(raw).replace(/[^A-Za-z0-9_-]/g, '');
-      localStorage.setItem('clientId', id);
-    }
-    return id;
-  } catch (e) {
-    return 'anon' + Math.random().toString(36).slice(2);
-  }
-}
-const CLIENT_ID = getClientId();
-
-const fmt = (n) => new Intl.NumberFormat('id-ID').format(n);
-
-// ============ THEME ============
-
-function setTheme(theme) {
-  root.setAttribute('data-theme', theme);
-  try { localStorage.setItem('theme', theme); } catch (e) {}
-}
-
-(function loadTheme() {
-  try {
-    const saved = localStorage.getItem('theme');
-    if (saved) root.setAttribute('data-theme', saved);
-  } catch (e) {}
-})();
-
-themeBtn.onclick = () =>
-  setTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
-
-// ============ GREETING / WELCOME ============
-
-const isReturning = (() => {
-  try {
-    const seen = localStorage.getItem('visited');
-    localStorage.setItem('visited', '1');
-    return !!seen;
-  } catch (e) { return false; }
-})();
-
-function greetingWord() {
-  const h = new Date().getHours();
-  if (h < 4) return 'Selamat malam';
-  if (h < 11) return 'Selamat pagi';
-  if (h < 15) return 'Selamat siang';
-  if (h < 19) return 'Selamat sore';
-  return 'Selamat malam';
-}
-
-let heroRun = 0;
-
-function typeInto(el, text, run, speed = 42) {
-  return new Promise((resolve) => {
-    if (reduceMotion) { el.textContent = text; return resolve(); }
-    el.textContent = '';
-    el.classList.add('caret');
-    let i = 0;
-    const timer = setInterval(() => {
-      if (run !== heroRun) { clearInterval(timer); el.classList.remove('caret'); return resolve(); }
-      i++;
-      el.textContent = text.slice(0, i);
-      if (i >= text.length) {
-        clearInterval(timer);
-        el.classList.remove('caret');
-        resolve();
-      }
-    }, speed);
-  });
-}
-
-async function playHero() {
-  const run = ++heroRun;
-  welcomeEl.textContent = isReturning ? 'Selamat datang kembali' : 'Selamat datang di Athena';
-  welcomeEl.classList.remove('show');
-  void welcomeEl.offsetWidth;
-  welcomeEl.classList.add('show');
-  greetEl.textContent = '';
-  subEl.textContent = '';
-  await typeInto(greetEl, `${greetingWord()},${getDisplayName()}`, run);
-  if (run !== heroRun) return;
-  await typeInto(subEl, 'Apa yang sedang kamu pikirkan?', run);
-}
-
-// ============ MENUS ============
-
-function toggleMenu(menuId) {
-  const menu = $(menuId);
-  const isOpen = menu.classList.contains('open');
-  document.querySelectorAll('.menu').forEach((m) => m.classList.remove('open'));
-  if (!isOpen) menu.classList.add('open');
-}
-window.toggleMenu = toggleMenu;
-
-document.addEventListener('click', (e) => {
-  if (!e.target.closest('.menu')) {
-    document.querySelectorAll('.menu').forEach((m) => m.classList.remove('open'));
-  }
-});
-
-document.querySelectorAll('.menu[data-pick] li').forEach((li) => {
-  li.onclick = () => {
-    const menu = li.closest('.menu');
-    menu.querySelector('.pick-label').textContent = li.textContent;
-    menu.dataset.value = li.textContent;
-    menu.classList.remove('open');
-  };
-});
-
-const currentModel = () => 'Gemini';
-const currentStyle = () => $('styleMenu').dataset.value || 'Casual';
-
-// ============ EXAMPLE CARDS ============
-
-document.querySelectorAll('.card').forEach((card) => {
-  card.onclick = () => {
-    input.value = card.dataset.p;
-    autosize();
-    input.focus();
-  };
-});
-
-// ============ TEXTAREA ============
-
-function autosize() {
-  input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-}
-input.addEventListener('input', autosize);
-
-// ============ FILE UPLOAD ============
-
-const MAX_FILE = 10 * 1024 * 1024;
-const MAX_TOTAL = 20 * 1024 * 1024;
-
-function renderFiles() {
-  filesBox.innerHTML = '';
-  attached.forEach((f, i) => {
-    const chip = document.createElement('div');
-    chip.className = 'chip';
-    const name = document.createElement('span');
-    name.textContent = '📎 ' + f.name;
-    const rm = document.createElement('button');
-    rm.textContent = '×';
-    rm.setAttribute('aria-label', 'Hapus ' + f.name);
-    rm.onclick = () => { attached.splice(i, 1); renderFiles(); };
-    chip.append(name, rm);
-    filesBox.appendChild(chip);
-  });
-}
-
-function openFilePicker() {
-  document.querySelectorAll('.menu').forEach((m) => m.classList.remove('open'));
-  fileInput.click();
-}
-
-$('uploadItem').onclick = openFilePicker;
-
-document.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
-    e.preventDefault();
-    openFilePicker();
-  }
-});
-
-fileInput.onchange = () => {
-  for (const file of fileInput.files) {
-    const total = attached.reduce((n, f) => n + f.size, 0);
-    if (file.size > MAX_FILE) {
-      alert(file.name + ' terlalu besar (maks 10 MB per file).');
-      continue;
-    }
-    if (total + file.size > MAX_TOTAL) {
-      alert('Total lampiran melebihi 20 MB.');
-      break;
-    }
-    attached.push(file);
-  }
-  fileInput.value = '';
-  renderFiles();
-};
-
-// ============ TOKEN METER ============
-
-function updateTokens(u) {
-  if (!u) return;
-  tokLeft.textContent = fmt(u.remaining);
-  tokMax.textContent = fmt(u.limit);
-  const pct = u.limit ? Math.max(0, Math.min(100, (u.remaining / u.limit) * 100)) : 0;
-  tokBar.style.width = pct + '%';
-  meter.classList.toggle('empty', u.remaining <= 0);
-  meter.classList.toggle('low', u.remaining > 0 && pct <= 20);
-  meter.classList.remove('pop');
-  void meter.offsetWidth;
-  meter.classList.add('pop');
-}
-
-async function loadUsage() {
-  try {
-    const res = await fetch('/api/usage?client_id=' + encodeURIComponent(CLIENT_ID), {
-      headers: authHeaders(),
-    });
-    const json = await res.json();
-    updateTokens(json.data && json.data.usage);
-  } catch (e) {
-    tokLeft.textContent = '–';
-    tokMax.textContent = '–';
-  }
-}
-
-// ============ MARKDOWN ============
-
-function renderMarkdown(src) {
-  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const inline = (t) => esc(t)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
-
-  let html = '';
-  let inCode = false;
-  let code = [];
-  let list = null;
-  let para = [];
-
-  const flushPara = () => {
-    if (para.length) { html += '<p>' + para.map(inline).join('<br>') + '</p>'; para = []; }
-  };
-  const flushList = () => {
-    if (list) {
-      html += `<${list.tag}>` + list.items.map((i) => '<li>' + inline(i) + '</li>').join('') + `</${list.tag}>`;
-      list = null;
-    }
-  };
-  const pushItem = (tag, text) => {
-    flushPara();
-    if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
-    list.items.push(text);
-  };
-
-  for (const line of src.split('\n')) {
-    if (/^```/.test(line)) {
-      if (inCode) {
-        html += '<pre><code>' + esc(code.join('\n')) + '</code></pre>';
-        code = []; inCode = false;
-      } else {
-        flushPara(); flushList(); inCode = true;
-      }
-      continue;
-    }
-    if (inCode) { code.push(line); continue; }
-
-    let m;
-    if (!line.trim()) { flushPara(); flushList(); continue; }
-    if ((m = line.match(/^#{1,4}\s+(.*)/))) { flushPara(); flushList(); html += '<h4>' + inline(m[1]) + '</h4>'; continue; }
-    if ((m = line.match(/^\s*[-*•]\s+(.*)/))) { pushItem('ul', m[1]); continue; }
-    if ((m = line.match(/^\s*\d+[.)]\s+(.*)/))) { pushItem('ol', m[1]); continue; }
-    flushList();
-    para.push(line);
-  }
-  if (inCode) html += '<pre><code>' + esc(code.join('\n')) + '</code></pre>';
-  flushPara();
-  flushList();
-  return html;
-}
-
-// ============ SCROLL ============
-
-const nearBottom = () => center.scrollHeight - center.scrollTop - center.clientHeight < 140;
-
-function scrollDown(smooth) {
-  center.scrollTo({ top: center.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-}
-
-// ============ MESSAGES ============
-
-function setChatting(on) {
-  center.classList.toggle('chatting', on);
-}
-
-function addUserMessage(text, names, scroll = true) {
-  const div = document.createElement('div');
-  div.className = 'msg user';
-  div.textContent = (text || '') + (names.length ? (text ? '  ' : '') + '📎 ' + names.join(', ') : '');
-  thread.appendChild(div);
-  if (scroll) scrollDown(true);
-}
-
-function addError(text) {
-  const div = document.createElement('div');
-  div.className = 'msg err';
-  div.textContent = text;
-  thread.appendChild(div);
-  scrollDown(true);
-}
-
-function showTyping() {
-  const div = document.createElement('div');
-  div.className = 'msg typing-indicator';
-  div.innerHTML = '<span class="dots"><i></i><i></i><i></i></span><span class="t-label">Athena sedang mengetik…</span>';
-  thread.appendChild(div);
-  scrollDown(true);
-  return div;
-}
-
-function typewriter(bubble, body, text) {
-  return new Promise((resolve) => {
-    if (reduceMotion) { body.innerHTML = renderMarkdown(text); return resolve(); }
-    const total = text.length;
-    const duration = Math.min(Math.max(total * 14, 700), 5500);
-    const start = performance.now();
-    bubble.classList.add('typing');
-
-    function frame(now) {
-      const p = Math.min(1, (now - start) / duration);
-      const stick = nearBottom();
-      body.innerHTML = renderMarkdown(text.slice(0, Math.floor(total * p)));
-      if (stick) center.scrollTop = center.scrollHeight;
-      if (p < 1) {
-        requestAnimationFrame(frame);
-      } else {
-        body.innerHTML = renderMarkdown(text);
-        bubble.classList.remove('typing');
-        resolve();
-      }
-    }
-    requestAnimationFrame(frame);
-  });
-}
-
-function addFooter(bubble, text, metaText) {
-  const foot = document.createElement('div');
-  foot.className = 'msg-foot';
-  const small = document.createElement('small');
-  small.textContent = metaText;
-  const copy = document.createElement('button');
-  copy.className = 'copy';
-  copy.textContent = 'Salin';
-  copy.onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      copy.textContent = 'Tersalin ✓';
-      setTimeout(() => (copy.textContent = 'Salin'), 1500);
-    } catch (e) {}
-  };
-  foot.append(small, copy);
-  bubble.appendChild(foot);
-}
-
-function createAIBubble() {
-  const bubble = document.createElement('div');
-  bubble.className = 'msg ai';
-  const body = document.createElement('div');
-  body.className = 'md';
-  bubble.appendChild(body);
-  thread.appendChild(bubble);
-  return { bubble, body };
-}
-
-async function showAIReply(text, metaText) {
-  const { bubble, body } = createAIBubble();
-  await typewriter(bubble, body, text);
-  addFooter(bubble, text, metaText);
-  if (nearBottom()) scrollDown(true);
-}
-
-function restoreAIReply(m) {
-  const { bubble, body } = createAIBubble();
-  body.innerHTML = renderMarkdown(m.content);
-  const meta = (m.tokens ? `⚡ ${fmt(m.tokens)} token · ` : '') + (m.model || '');
-  addFooter(bubble, m.content, meta);
-}
-
-// ============ FOLLOW-UP SUGGESTIONS ============
-
-const FALLBACK_SUGGESTIONS = ['Jelaskan lebih detail', 'Berikan contoh', 'Ringkas jawabanmu'];
-
-function clearSuggestions() {
-  thread.querySelectorAll('.suggest').forEach((el) => el.remove());
-}
-
-function showSuggestions(list) {
-  const items = (list && list.length ? list : FALLBACK_SUGGESTIONS).slice(0, 3);
-  const box = document.createElement('div');
-  box.className = 'suggest';
-  items.forEach((t, i) => {
-    const b = document.createElement('button');
-    b.textContent = t;
-    b.style.animationDelay = i * 90 + 'ms';
-    b.onclick = () => submitMessage(t);
-    box.appendChild(b);
-  });
-  thread.appendChild(box);
-  if (nearBottom()) scrollDown(true);
-}
-
-// ============ SEND ============
-
-async function submitMessage(textOverride) {
-  if (busy) return;
-  const value = (typeof textOverride === 'string' ? textOverride : input.value).trim();
-  if (!value && !attached.length) return;
-
-  busy = true;
-  sendBtn.disabled = true;
-
-  const files = attached;
-  setChatting(true);
-  clearSuggestions();
-  addUserMessage(value, files.map((f) => f.name));
-
-  input.value = '';
-  autosize();
-  attached = [];
-  renderFiles();
-
-  const typing = showTyping();
-  const result = await callAIAPI(value, files);
-  typing.remove();
-
-  if (result.usage) updateTokens(result.usage);
-
-  if (!result.ok) {
-    addError(result.error);
-  } else {
-    const d = result.data;
-    if (d.thread_id) threadId = d.thread_id;
-    loadHistory();
-    await showAIReply(d.response, `⚡ ${fmt(d.tokens_used)} token · ${d.model}`);
-    showSuggestions(d.suggestions);
-  }
-
-  busy = false;
-  sendBtn.disabled = false;
-  input.focus();
-}
-
-sendBtn.onclick = () => submitMessage();
-
-input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    submitMessage();
-  }
-});
-
-// ============ NEW THREAD ============
-
-function startNewThread() {
-  thread.innerHTML = '';
-  threadId = null;
-  setChatting(false);
-  input.value = '';
-  autosize();
-  attached = [];
-  renderFiles();
-  center.scrollTop = 0;
-  input.focus();
-  playHero();
-  renderHistory();
-}
-
-newThreadBtn.onclick = () => {
-  if (busy) return;
-  startNewThread();
-};
-
-// ============ API ============
-
-async function callAIAPI(message, files) {
-  try {
-    const form = new FormData();
-    form.append('message', message);
-    form.append('model', currentModel());
-    form.append('style', currentStyle());
-    form.append('client_id', CLIENT_ID);
-    if (threadId) form.append('thread_id', threadId);
-    files.forEach((f) => form.append('files', f));
-
-    const response = await fetch('/api/chat', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: form,
-    });
-    const json = await response.json();
-
-    const usage = json.data && json.data.usage;
-    if (json.status !== 'success') {
-      return { ok: false, error: json.error || 'Terjadi kesalahan', usage };
-    }
-    return { ok: true, data: json.data, usage };
-  } catch (error) {
-    console.error('Error calling API:', error);
-    return { ok: false, error: 'Tidak bisa terhubung ke server: ' + error.message };
-  }
-}
-
-// ============ CHAT HISTORY ============
-
-const drawer = $('drawer');
-const drawerBackdrop = $('drawerBackdrop');
-const historyBtn = $('historyBtn');
-const historyList = $('historyList');
-let historyCache = [];
-
-function openDrawer() {
-  drawer.classList.add('open');
-  drawerBackdrop.classList.add('open');
-  loadHistory();
-}
-
-function closeDrawer() {
-  drawer.classList.remove('open');
-  drawerBackdrop.classList.remove('open');
-}
-
-historyBtn.onclick = () => (drawer.classList.contains('open') ? closeDrawer() : openDrawer());
-drawerBackdrop.onclick = closeDrawer;
-$('drawerClose').onclick = closeDrawer;
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
-
-function dayGroup(iso) {
-  const startOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diff = Math.round((startOf(new Date()) - startOf(new Date(iso))) / 86400000);
-  if (diff <= 0) return 'Hari ini';
-  if (diff === 1) return 'Kemarin';
-  if (diff <= 7) return '7 hari terakhir';
-  return 'Lebih lama';
-}
-
-async function loadHistory() {
-  try {
-    const res = await fetch('/api/threads?client_id=' + encodeURIComponent(CLIENT_ID), {
-      headers: authHeaders(),
-    });
-    const json = await res.json();
-    historyCache = (json.data && json.data.threads) || [];
-    renderHistory();
-  } catch (e) {
-    console.error('Gagal memuat riwayat:', e);
-  }
-}
-
-function renderHistory() {
-  historyList.innerHTML = '';
-  if (!historyCache.length) {
-    const p = document.createElement('p');
-    p.className = 'hist-empty';
-    p.textContent = 'Belum ada riwayat. Mulai ngobrol dulu!';
-    historyList.appendChild(p);
-    return;
-  }
-
-  let lastGroup = '';
-  historyCache.forEach((t) => {
-    const group = dayGroup(t.last_updated);
-    if (group !== lastGroup) {
-      const h = document.createElement('div');
-      h.className = 'hist-group';
-      h.textContent = group;
-      historyList.appendChild(h);
-      lastGroup = group;
+# ============ STORAGE & SUPABASE HELPERS ============
+
+threads_db: Dict[str, List[Dict]] = {}
+threads_meta: Dict[str, Dict] = {}
+usage_db: Dict[str, Dict] = {}
+
+DATA_FILE = '/tmp/threads_data.json' if os.environ.get('VERCEL') else os.path.join(BASE_DIR, 'threads_data.json')
+
+def supabase_enabled() -> bool:
+    return bool(SUPABASE_URL and SUPABASE_ANON_KEY)
+
+def _sb_headers(use_service: bool = True) -> Dict[str, str]:
+    key = SUPABASE_SERVICE_KEY if use_service else SUPABASE_ANON_KEY
+    return {
+        'apikey': key,
+        'Authorization': f'Bearer {key}',
+        'Content-Type': 'application/json',
     }
 
-    const item = document.createElement('div');
-    item.className = 'hist-item' + (t.id === threadId ? ' active' : '');
-    item.tabIndex = 0;
-    item.setAttribute('role', 'button');
+def get_authenticated_user() -> Optional[Dict]:
+    """Verifikasi Bearer token dari header Authorization ke Supabase Auth."""
+    if not supabase_enabled():
+        return None
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None
+    token = auth.split(' ', 1)[1].strip()
+    if not token:
+        return None
+    try:
+        res = requests.get(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={'apikey': SUPABASE_ANON_KEY, 'Authorization': f'Bearer {token}'},
+            timeout=10,
+        )
+        if res.ok:
+            u = res.json()
+            meta = u.get('user_metadata') or {}
+            email = u.get('email') or ''
+            name = meta.get('full_name') or (email.split('@')[0] if email else 'User')
+            return {'id': u['id'], 'email': email, 'name': name}
+    except Exception:
+        pass
+    return None
 
-    const title = document.createElement('span');
-    title.className = 'hist-title';
-    title.textContent = t.title;
+def save_threads_local():
+    try:
+        tmp = DATA_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'threads': threads_db, 'meta': threads_meta}, f, ensure_ascii=False)
+        os.replace(tmp, DATA_FILE)
+    except Exception as e:
+        print('Gagal menyimpan riwayat lokal:', e)
 
-    const del = document.createElement('button');
-    del.className = 'hist-del';
-    del.textContent = '×';
-    del.setAttribute('aria-label', 'Hapus chat: ' + t.title);
-    del.onclick = (e) => { e.stopPropagation(); deleteThread(t.id, t.title); };
+def load_threads_local():
+    try:
+        with open(DATA_FILE, encoding='utf-8') as f:
+            d = json.load(f)
+        threads_db.update(d.get('threads', {}))
+        threads_meta.update(d.get('meta', {}))
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print('Gagal membaca riwayat lokal:', e)
 
-    item.onclick = () => openThread(t.id);
-    item.onkeydown = (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); openThread(t.id); }
-    };
-    item.append(title, del);
-    historyList.appendChild(item);
-  });
-}
+load_threads_local()
 
-async function openThread(id) {
-  if (busy) return;
-  if (id === threadId) { closeDrawer(); return; }
+# ============ UTILITY FUNCTIONS ============
 
-  try {
-    const res = await fetch(`/api/threads/${encodeURIComponent(id)}?client_id=${encodeURIComponent(CLIENT_ID)}`, {
-      headers: authHeaders(),
-    });
-    const json = await res.json();
-    if (json.status !== 'success') {
-      alert(json.error || 'Riwayat tidak ditemukan.');
-      loadHistory();
-      return;
+def generate_thread_id():
+    return str(uuid.uuid4())[:12]
+
+def format_response(data: Dict, status: str = 'success', error: Optional[str] = None):
+    return {
+        'status': status,
+        'data': data,
+        'error': error,
+        'timestamp': datetime.now().isoformat(),
     }
 
-    heroRun++;
-    thread.innerHTML = '';
-    threadId = id;
-    setChatting(true);
+def make_title(message: str, file_names: List[str]) -> str:
+    text = re.sub(r'\s+', ' ', message or '').strip()
+    if not text and file_names:
+        text = 'Lampiran: ' + file_names[0]
+    text = text or 'Chat baru'
+    return text if len(text) <= 40 else text[:40].rstrip() + '…'
 
-    const msgs = json.data.messages || [];
-    msgs.forEach((m) => {
-      if (m.role === 'user') addUserMessage(m.content, [], false);
-      else restoreAIReply(m);
-    });
+def clean_client_id(raw) -> str:
+    cid = re.sub(r'[^A-Za-z0-9_-]', '', str(raw or ''))[:64]
+    return cid or (request.remote_addr or 'anon')
 
-    const last = msgs[msgs.length - 1];
-    if (last && last.role === 'assistant') showSuggestions(last.suggestions);
+def resolve_owner(raw_cid) -> Tuple[str, Optional[Dict]]:
+    """Kembalikan (owner_id, user_dict_jika_login)."""
+    user = get_authenticated_user()
+    if user:
+        return user['id'], user
+    return clean_client_id(raw_cid), None
 
-    closeDrawer();
-    renderHistory();
-    requestAnimationFrame(() => { center.scrollTop = center.scrollHeight; });
-  } catch (e) {
-    alert('Gagal membuka riwayat: ' + e.message);
-  }
-}
+# ---- Usage (Token Harian) ----
 
-async function deleteThread(id, title) {
-  if (busy && id === threadId) {
-    alert('Tunggu Athena selesai menjawab dulu.');
-    return;
-  }
-  if (!confirm(`Hapus chat "${title}"?`)) return;
-  try {
-    await fetch(`/api/threads/${encodeURIComponent(id)}?client_id=${encodeURIComponent(CLIENT_ID)}`, {
-      method: 'DELETE',
-      headers: authHeaders(),
-    });
-  } catch (e) {}
-  if (id === threadId) startNewThread();
-  loadHistory();
-}
+def get_usage(owner_id: str, is_user: bool = False) -> Dict:
+    today = date.today().isoformat()
+    if is_user and supabase_enabled():
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/daily_usage?user_id=eq.{owner_id}&day=eq.{today}&select=used"
+            res = requests.get(url, headers=_sb_headers(True), timeout=10)
+            if res.ok and res.json():
+                used = int(res.json()[0].get('used', 0))
+                return {'limit': TOKEN_BUDGET, 'used': used, 'remaining': max(0, TOKEN_BUDGET - used)}
+            return {'limit': TOKEN_BUDGET, 'used': 0, 'remaining': TOKEN_BUDGET}
+        except Exception as e:
+            print('Supabase usage read error:', e)
 
-// ============ AUTH MODAL LOGIC ============
-
-(function initAuth() {
-  const modal = $('authModal');
-  const avatarBtn = $('userAvatar');
-  const closeBtn = $('authCloseBtn');
-  const form = $('authForm');
-  const switchBtn = $('authSwitchBtn');
-  const switchText = $('authSwitchText');
-  const titleEl = $('authModalTitle');
-  const nameInput = $('authName');
-  const submitBtn = $('authSubmitBtn');
-  const errEl = $('authError');
-  const outView = $('authLoggedOutView');
-  const inView = $('authLoggedInView');
-  const logoutBtn = $('logoutBtn');
-  if (!modal || !avatarBtn) return;
-
-  let isRegister = false;
-
-  function syncModalView() {
-    errEl.style.display = 'none';
-    if (currentUser) {
-      titleEl.textContent = 'Profil Pengguna';
-      outView.style.display = 'none';
-      inView.style.display = 'block';
-      $('profileName').textContent = currentUser.name;
-      $('profileEmail').textContent = currentUser.email;
-    } else {
-      titleEl.textContent = isRegister ? 'Daftar Akun Athena' : 'Masuk ke Athena';
-      outView.style.display = 'block';
-      inView.style.display = 'none';
-      nameInput.style.display = isRegister ? 'block' : 'none';
-      nameInput.required = isRegister;
-      submitBtn.textContent = isRegister ? 'Daftar' : 'Masuk';
-      switchText.textContent = isRegister ? 'Sudah punya akun?' : 'Belum punya akun?';
-      switchBtn.textContent = isRegister ? 'Masuk di sini' : 'Daftar sekarang';
+    u = usage_db.get(owner_id)
+    if not u or u['day'] != today:
+        u = {'day': today, 'used': 0}
+        usage_db[owner_id] = u
+    return {
+        'limit': TOKEN_BUDGET,
+        'used': u['used'],
+        'remaining': max(0, TOKEN_BUDGET - u['used']),
     }
-  }
 
-  avatarBtn.onclick = () => {
-    syncModalView();
-    modal.classList.add('show');
-  };
+def add_usage(owner_id: str, tokens: int, is_user: bool = False) -> Dict:
+    current = get_usage(owner_id, is_user)
+    new_used = current['used'] + max(0, int(tokens))
+    today = date.today().isoformat()
 
-  closeBtn.onclick = () => modal.classList.remove('show');
-  modal.onclick = (e) => { if (e.target === modal) modal.classList.remove('show'); };
+    if is_user and supabase_enabled():
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/daily_usage"
+            headers = {**_sb_headers(True), 'Prefer': 'resolution=merge-duplicates'}
+            requests.post(
+                url,
+                headers=headers,
+                json={'user_id': owner_id, 'day': today, 'used': new_used},
+                timeout=10,
+            )
+            return {'limit': TOKEN_BUDGET, 'used': new_used, 'remaining': max(0, TOKEN_BUDGET - new_used)}
+        except Exception as e:
+            print('Supabase usage write error:', e)
 
-  switchBtn.onclick = () => {
-    isRegister = !isRegister;
-    syncModalView();
-  };
+    usage_db[owner_id] = {'day': today, 'used': new_used}
+    return get_usage(owner_id, False)
 
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    errEl.style.display = 'none';
-    submitBtn.disabled = true;
+# ---- Threads (Riwayat Chat) ----
 
-    const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
-    const payload = {
-      email: $('authEmail').value.trim(),
-      password: $('authPassword').value,
-      ...(isRegister ? { name: nameInput.value.trim() } : {}),
-    };
+def db_get_thread(thread_id: str, owner_id: str, is_user: bool) -> Optional[Dict]:
+    if is_user and supabase_enabled():
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/threads?id=eq.{thread_id}&user_id=eq.{owner_id}&select=*"
+            res = requests.get(url, headers=_sb_headers(True), timeout=10)
+            if res.ok and res.json():
+                row = res.json()[0]
+                return {'id': row['id'], 'title': row['title'], 'messages': row.get('messages') or []}
+        except Exception as e:
+            print('Supabase get thread error:', e)
+        return None
 
-    try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
+    meta = threads_meta.get(thread_id)
+    if thread_id in threads_db and meta and meta.get('client_id') == owner_id:
+        return {'id': thread_id, 'title': meta.get('title'), 'messages': threads_db[thread_id]}
+    return None
 
-      if (json.status !== 'success') {
-        errEl.textContent = json.error || 'Autentikasi gagal.';
-        errEl.style.display = 'block';
-      } else if (json.data.needs_verification) {
-        alert(json.data.message);
-        isRegister = false;
-        syncModalView();
-      } else {
-        authToken = json.data.access_token;
-        currentUser = json.data.user;
-        localStorage.setItem('athena_token', authToken);
-        localStorage.setItem('athena_user', JSON.stringify(currentUser));
-        updateUserUI();
-        modal.classList.remove('show');
-        startNewThread();
-        loadUsage();
-        loadHistory();
-      }
-    } catch (err) {
-      errEl.textContent = 'Gagal terhubung ke server.';
-      errEl.style.display = 'block';
-    } finally {
-      submitBtn.disabled = false;
-    }
-  };
+def db_save_thread(thread_id: str, owner_id: str, title: str, messages: List[Dict], is_user: bool):
+    now = datetime.now(timezone.utc).isoformat()
+    if is_user and supabase_enabled():
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/threads"
+            headers = {**_sb_headers(True), 'Prefer': 'resolution=merge-duplicates'}
+            requests.post(
+                url,
+                headers=headers,
+                json={
+                    'id': thread_id,
+                    'user_id': owner_id,
+                    'title': title,
+                    'messages': messages,
+                    'updated_at': now,
+                },
+                timeout=10,
+            )
+            return
+        except Exception as e:
+            print('Supabase save thread error:', e)
 
-  logoutBtn.onclick = () => {
-    authToken = '';
-    currentUser = null;
-    localStorage.removeItem('athena_token');
-    localStorage.removeItem('athena_user');
-    updateUserUI();
-    modal.classList.remove('show');
-    startNewThread();
-    loadUsage();
-    loadHistory();
-  };
-})();
+    threads_db[thread_id] = messages
+    if thread_id not in threads_meta:
+        threads_meta[thread_id] = {'client_id': owner_id, 'title': title, 'created': now, 'updated': now}
+    else:
+        threads_meta[thread_id]['updated'] = now
+    save_threads_local()
 
-// ============ INIT ============
+def estimate_tokens(messages: List[Dict], reply: str) -> int:
+    chars = sum(len(m.get('content', '')) for m in messages) + len(reply)
+    return max(1, chars // 4)
 
-updateUserUI();
-playHero();
-loadUsage();
+def build_history_from_list(raw_messages: List[Dict]) -> List[Dict]:
+    history = [
+        {'role': m['role'], 'content': m['content']}
+        for m in raw_messages
+        if not str(m.get('content', '')).startswith('Error')
+    ][-HISTORY_LIMIT:]
+    while history and history[0]['role'] != 'user':
+        history.pop(0)
+    return history
+
+def read_uploads(uploads) -> Tuple[str, List[Tuple[bytes, str]], List[str]]:
+    text_block = ''
+    media: List[Tuple[bytes, str]] = []
+    names: List[str] = []
+
+    for f in uploads:
+        if not f or not f.filename:
+            continue
+        ext = os.path.splitext(f.filename)[1].lower()
+        data = f.read()
+        names.append(f.filename)
+
+        if ext in TEXT_EXT:
+            text_block += f"\n\n[File: {f.filename}]\n{data.decode('utf-8', errors='replace')}"
+        elif ext in MEDIA_MIME:
+            media.append((data, MEDIA_MIME[ext]))
+        else:
+            raise ValueError(f"Tipe file tidak didukung: {f.filename}")
+
+    return text_block, media, names
+
+# ============ AI INTEGRATION (GEMINI + GROQ FAILOVER) ============
+
+def call_google_gemini(messages: List[Dict], style: str = 'Formal',
+                       media: Optional[List[Tuple[bytes, str]]] = None) -> Tuple[str, int, bool]:
+    api_key = _pick_key()
+    if not api_key:
+        return "GEMINI_API_KEY belum diisi", 0, False
+
+    try:
+        if api_key.startswith('AQ.'):
+            convo = [f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in messages]
+            url = "https://generativelanguage.googleapis.com/v1beta/interactions"
+            headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+            payload = {
+                "model": MODELS['Gemini']['model_id'],
+                "input": "\n\n".join(convo),
+                "system_instruction": build_system_prompt(style),
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            data = resp.json()
+            if not resp.ok:
+                err_msg = data.get('error', {}).get('message', resp.text)
+                return f"Gagal memanggil Gemini: {resp.status_code} {err_msg}", 0, False
+
+            text = ""
+            for step in data.get('steps', []):
+                if step.get('type') == 'model_output':
+                    for item in step.get('content', []):
+                        if item.get('type') == 'text':
+                            text += item.get('text', '')
+            if not text:
+                text = "".join(out.get('text', '') for out in data.get('outputs', []) if out.get('type') == 'text')
+            if not text:
+                return "Model tidak memberikan jawaban teks.", 0, False
+
+            tokens = data.get('usage', {}).get('total_tokens') or estimate_tokens(messages, text)
+            return text, tokens, True
+
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        contents = []
+        for i, m in enumerate(messages):
+            role = 'model' if m['role'] == 'assistant' else 'user'
+            parts = []
+            if i == len(messages) - 1 and media:
+                parts.extend(types.Part.from_bytes(data=d, mime_type=mt) for d, mt in media)
+            parts.append(types.Part.from_text(text=m['content']))
+            contents.append(types.Content(role=role, parts=parts))
+
+        response = client.models.generate_content(
+            model=MODELS['Gemini']['model_id'],
+            contents=contents,
+            config=types.GenerateContentConfig(system_instruction=build_system_prompt(style)),
+        )
+        text = response.text or ''
+        if not text:
+            return "Model tidak memberikan jawaban.", 0, False
+
+        meta = getattr(response, 'usage_metadata', None)
+        tokens = getattr(meta, 'total_token_count', 0) or estimate_tokens(messages, text)
+        return text, tokens, True
+
+    except Exception as e:
+        return f"Gagal memanggil Gemini: {e}", 0, False
+
+
+def call_groq(model_id: str, messages: List[Dict], style: str = 'Formal') -> Tuple[str, int, bool]:
+    api_key = _pick_groq_key()
+    if not api_key:
+        return "GROQ_API_KEY belum diisi", 0, False
+
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        groq_messages = [{"role": "system", "content": build_system_prompt(style)}] + [
+            {"role": m["role"], "content": m["content"]} for m in messages
+        ]
+        resp = requests.post(
+            url, headers=headers,
+            json={"model": model_id, "messages": groq_messages, "temperature": 0.7},
+            timeout=60,
+        )
+        data = resp.json()
+        if not resp.ok:
+            err_msg = data.get('error', {}).get('message', resp.text)
+            return f"Gagal memanggil Groq ({model_id}): {resp.status_code} {err_msg}", 0, False
+
+        choices = data.get('choices', [])
+        if not choices:
+            return f"Groq ({model_id}) tidak memberikan jawaban.", 0, False
+
+        raw_text = choices[0].get('message', {}).get('content') or ''
+        text = THINK_RE.sub('', raw_text).strip()
+        if not text:
+            return f"Groq ({model_id}) mengembalikan jawaban kosong.", 0, False
+
+        tokens = data.get('usage', {}).get('total_tokens') or estimate_tokens(messages, text)
+        return text, tokens, True
+
+    except Exception as e:
+        return f"Gagal memanggil Groq ({model_id}): {e}", 0, False
+
+
+def get_ai_response(message: str, model: str, style: str,
+                    media: Optional[List[Tuple[bytes, str]]] = None,
+                    history: Optional[List[Dict]] = None) -> Tuple[str, int, bool]:
+    messages = list(history or []) + [{"role": "user", "content": message}]
+
+    text, tokens, ok = call_google_gemini(messages, style, media)
+    if ok:
+        return text, tokens, True
+
+    if media:
+        return f"{text} (Lampiran PDF/gambar tidak dapat dialihkan ke model cadangan)", 0, False
+
+    if _pick_groq_key():
+        last_err = text
+        for fallback_id in GROQ_FALLBACK_MODELS:
+            fb_text, fb_tokens, fb_ok = call_groq(fallback_id, messages, style)
+            if fb_ok:
+                return fb_text, fb_tokens, True
+            last_err = fb_text
+        return f"Gemini dan semua model cadangan gagal merespons. Error terakhir: {last_err}", 0, False
+
+    return text, 0, False
+
+# ============ AUTH ENDPOINTS ============
+
+@app.route('/api/auth/register', methods=['POST'])
+def auth_register():
+    if not supabase_enabled():
+        return jsonify(format_response({}, status='error', error='Supabase belum dikonfigurasi di server')), 500
+
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+
+    if not name or not email or len(password) < 6:
+        return jsonify(format_response(
+            {}, status='error', error='Nama, email, dan password (minimal 6 karakter) wajib diisi.'
+        )), 400
+
+    try:
+        res = requests.post(
+            f"{SUPABASE_URL}/auth/v1/signup",
+            headers=_sb_headers(False),
+            json={'email': email, 'password': password, 'data': {'full_name': name}},
+            timeout=15,
+        )
+        body = res.json()
+        if not res.ok:
+            msg = body.get('msg') or body.get('error_description') or body.get('message') or 'Gagal mendaftar'
+            return jsonify(format_response({}, status='error', error=msg)), 400
+
+        token = body.get('access_token')
+        user = body.get('user') or {}
+        if not token:
+            return jsonify(format_response({
+                'needs_verification': True,
+                'message': 'Pendaftaran berhasil! Silakan cek email untuk verifikasi sebelum masuk.'
+            }))
+
+        return jsonify(format_response({
+            'access_token': token,
+            'user': {'id': user.get('id'), 'email': email, 'name': name},
+        }))
+    except Exception as e:
+        return jsonify(format_response({}, status='error', error=str(e))), 500
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    if not supabase_enabled():
+        return jsonify(format_response({}, status='error', error='Supabase belum dikonfigurasi di server')), 500
+
+    data = request.get_json() or {}
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+
+    if not email or not password:
+        return jsonify(format_response({}, status='error', error='Email dan password wajib diisi.')), 400
+
+    try:
+        res = requests.post(
+            f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
+            headers=_sb_headers(False),
+            json={'email': email, 'password': password},
+            timeout=15,
+        )
+        body = res.json()
+        if not res.ok:
+            msg = body.get('error_description') or body.get('msg') or 'Email atau password salah.'
+            return jsonify(format_response({}, status='error', error=msg)), 401
+
+        user = body.get('user') or {}
+        meta = user.get('user_metadata') or {}
+        name = meta.get('full_name') or email.split('@')[0]
+
+        return jsonify(format_response({
+            'access_token': body.get('access_token'),
+            'user': {'id': user.get('id'), 'email': user.get('email'), 'name': name},
+        }))
+    except Exception as e:
+        return jsonify(format_response({}, status='error', error=str(e))), 500
+
+
+@app.route('/api/auth/me', methods=['GET'])
+def auth_me():
+    user = get_authenticated_user()
+    if not user:
+        return jsonify(format_response({}, status='error', error='Sesi tidak valid atau sudah berakhir')), 401
+    return jsonify(format_response({'user': user}))
+
+# ============ API ENDPOINTS ============
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    current_key = _pick_key()
+    return jsonify(format_response({
+        'status': 'healthy',
+        'version': '2.3.0',
+        'gemini_configured': bool(current_key),
+        'groq_configured': bool(_pick_groq_key()),
+        'supabase_configured': supabase_enabled(),
+        'model_id': MODELS['Gemini']['model_id'],
+        'fallback_models': GROQ_FALLBACK_MODELS,
+    }))
+
+@app.route('/api/usage', methods=['GET'])
+def usage():
+    owner_id, user = resolve_owner(request.args.get('client_id'))
+    return jsonify(format_response({'usage': get_usage(owner_id, bool(user))}))
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    try:
+        uploads = []
+        if request.is_json:
+            data = request.get_json() or {}
+        else:
+            data = request.form.to_dict()
+            uploads = request.files.getlist('files')
+
+        message = (data.get('message') or '').strip()
+        model = data.get('model') or DEFAULT_MODEL
+        style = data.get('style') or 'Formal'
+        thread_id = data.get('thread_id')
+        owner_id, user = resolve_owner(data.get('client_id'))
+        is_user = bool(user)
+
+        if not is_user:
+            guest_msgs = sum(
+                sum(1 for m in msgs if m.get('role') == 'user')
+                for tid, msgs in threads_db.items()
+                if threads_meta.get(tid, {}).get('client_id') == owner_id
+            )
+            if guest_msgs >= GUEST_MESSAGE_LIMIT:
+                return jsonify(format_response(
+                    {'requires_auth': True, 'guest_limit': GUEST_MESSAGE_LIMIT},
+                    status='error',
+                    error=f'Batas {GUEST_MESSAGE_LIMIT} pesan untuk tamu sudah habis. Silakan masuk atau daftar akun untuk melanjutkan.'
+                )), 403
+
+        current = get_usage(owner_id, is_user)
+        if current['remaining'] <= 0:
+            return jsonify(format_response(
+                {'usage': current}, status='error',
+                error='Token harian habis. Coba lagi besok.'
+            )), 429
+
+        try:
+            file_text, media, file_names = read_uploads(uploads)
+        except ValueError as ve:
+            return jsonify(format_response({'usage': current}, status='error', error=str(ve))), 400
+
+        if not message and not file_names:
+            return jsonify(format_response({'usage': current}, status='error', error='Pesan kosong')), 400
+
+        full_message = (message or 'Tolong baca dan rangkum file ini.') + file_text
+
+        existing = db_get_thread(thread_id, owner_id, is_user) if thread_id else None
+        if not existing:
+            thread_id = generate_thread_id()
+            title = make_title(message, file_names)
+            msgs_list = []
+        else:
+            title = existing['title']
+            msgs_list = list(existing['messages'])
+
+        history = build_history_from_list(msgs_list)
+
+        stored = message + (f" [lampiran: {', '.join(file_names)}]" if file_names else '')
+        msgs_list.append({
+            'role': 'user',
+            'content': stored,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+        ai_text, tokens, ok = get_ai_response(full_message, model, style, media, history)
+
+        if not ok:
+            return jsonify(format_response(
+                {'usage': get_usage(owner_id, is_user)}, status='error', error=ai_text
+            )), 502
+
+        answer, suggestions = split_suggestions(ai_text)
+        new_usage = add_usage(owner_id, tokens, is_user)
+
+        now = datetime.now().isoformat()
+        msgs_list.append({
+            'role': 'assistant',
+            'content': answer,
+            'timestamp': now,
+            'model': model,
+            'tokens': tokens,
+            'suggestions': suggestions,
+        })
+        db_save_thread(thread_id, owner_id, title, msgs_list, is_user)
+
+        return jsonify(format_response({
+            'thread_id': thread_id,
+            'title': title,
+            'response': answer,
+            'suggestions': suggestions,
+            'model': model,
+            'style': style,
+            'tokens_used': tokens,
+            'usage': new_usage,
+        }))
+
+    except Exception as e:
+        return jsonify(format_response({}, status='error', error=str(e))), 500
+
+@app.route('/api/threads', methods=['GET'])
+def get_threads():
+    owner_id, user = resolve_owner(request.args.get('client_id'))
+    if user and supabase_enabled():
+        try:
+            url = (f"{SUPABASE_URL}/rest/v1/threads?user_id=eq.{owner_id}"
+                   "&select=id,title,messages,updated_at&order=updated_at.desc")
+            res = requests.get(url, headers=_sb_headers(True), timeout=10)
+            if res.ok:
+                items = [
+                    {
+                        'id': r['id'],
+                        'title': r.get('title') or 'Chat baru',
+                        'message_count': len(r.get('messages') or []),
+                        'last_updated': r.get('updated_at'),
+                    }
+                    for r in res.json()
+                ]
+                return jsonify(format_response({'threads': items, 'total': len(items)}))
+        except Exception as e:
+            print('Supabase list threads error:', e)
+
+    items = []
+    for tid, messages in threads_db.items():
+        meta = threads_meta.get(tid)
+        if messages and meta and meta.get('client_id') == owner_id:
+            items.append({
+                'id': tid,
+                'title': meta.get('title') or 'Chat baru',
+                'message_count': len(messages),
+                'last_updated': meta.get('updated') or messages[-1]['timestamp'],
+            })
+    items.sort(key=lambda x: x['last_updated'], reverse=True)
+    return jsonify(format_response({'threads': items, 'total': len(items)}))
+
+@app.route('/api/threads/<thread_id>', methods=['GET'])
+def get_thread(thread_id):
+    owner_id, user = resolve_owner(request.args.get('client_id'))
+    t = db_get_thread(thread_id, owner_id, bool(user))
+    if not t:
+        return jsonify(format_response({}, status='error', error='Thread tidak ditemukan')), 404
+    return jsonify(format_response({
+        'thread_id': t['id'],
+        'title': t['title'],
+        'messages': t['messages'],
+    }))
+
+@app.route('/api/threads/<thread_id>', methods=['DELETE'])
+def delete_thread(thread_id):
+    owner_id, user = resolve_owner(request.args.get('client_id'))
+    if user and supabase_enabled():
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/threads?id=eq.{thread_id}&user_id=eq.{owner_id}"
+            requests.delete(url, headers=_sb_headers(True), timeout=10)
+            return jsonify(format_response({'message': 'Thread dihapus', 'thread_id': thread_id}))
+        except Exception as e:
+            return jsonify(format_response({}, status='error', error=str(e))), 500
+
+    meta = threads_meta.get(thread_id)
+    if thread_id not in threads_db or not meta or meta.get('client_id') != owner_id:
+        return jsonify(format_response({}, status='error', error='Thread tidak ditemukan')), 404
+    threads_db.pop(thread_id, None)
+    threads_meta.pop(thread_id, None)
+    save_threads_local()
+    return jsonify(format_response({'message': 'Thread dihapus', 'thread_id': thread_id}))
+
+@app.route('/api/models', methods=['GET'])
+def get_models():
+    models_list = list(MODELS.keys())
+    return jsonify(format_response({'models': models_list, 'total': len(models_list)}))
+
+@app.route('/api/styles', methods=['GET'])
+def get_styles():
+    styles_list = list(WRITING_STYLES.keys())
+    return jsonify(format_response({'styles': styles_list, 'total': len(styles_list)}))
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify(format_response({}, status='error', error='Endpoint tidak ditemukan')), 404
+
+@app.errorhandler(413)
+def too_large(error):
+    return jsonify(format_response({}, status='error', error='File terlalu besar (total maks 25 MB)')), 413
+
+@app.errorhandler(500)
+def server_error(error):
+    return jsonify(format_response({}, status='error', error='Internal server error')), 500
+
+if __name__ == '__main__':
+    if not GOOGLE_API_KEY:
+        print("⚠️  WARNING: GEMINI_API_KEY belum diisi di file .env!")
+    if not GROQ_API_KEY:
+        print("⚠️  WARNING: GROQ_API_KEY belum diisi di file .env!")
+    if not supabase_enabled():
+        print("⚠️  WARNING: SUPABASE_URL / SUPABASE_ANON_KEY belum diisi di file .env!")
+    app.run(debug=True, host='127.0.0.1', port=5000)
